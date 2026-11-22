@@ -46,8 +46,10 @@ public final class RustCompiler {
         boolean msvc = rustTarget.endsWith("-msvc");
         String staticLibrary = msvc ? "jnz_rust_support.lib" : "libjnz_rust_support.a";
         String zigTarget = msvc ? target.replace("-gnu", "-msvc") : target;
+        // GNU COFF linking uses the stack probes supplied by Rust/MinGW. Zig's weak aliases conflict with them.
+        String compilerRuntime = rustTarget.endsWith("-windows-gnu") ? "-fno-compiler-rt" : "-fcompiler-rt";
         run(directory, "zig-support.log", "Zig JNI companion", executable(zig, "zig"),
-                "build-lib", "bridge.zig", "-static", "-O", "ReleaseSafe", "-fPIC", "-fcompiler-rt",
+                "build-lib", "bridge.zig", "-static", "-O", "ReleaseSafe", "-fPIC", compilerRuntime,
                 "-target", zigTarget, "-femit-bin=" + staticLibrary);
         String extension = target.contains("-windows-") ? ".dll" : target.endsWith("-macos") ? ".dylib" : ".so";
         String artifact = "jnzr_" + UUID.randomUUID().toString().replace("-", "") + extension;
