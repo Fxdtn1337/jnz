@@ -4,14 +4,12 @@
 
 J2Rust 把 JAR 里的 Java 方法编译成 Rust 和 JNI 动态库。构建完成后，调用方仍然使用原来的 JAR 入口。想知道哪些方法会被转换，可以先运行 `inspect`。想看生成的 Rust，可以运行 `emit-rust`。
 
-项目最初由 GPT-6.2-sol 编写。
-
 ## Releases
 
 | 版本 | 说明 |
 | --- | --- |
 | `0.1.0` | 首版已上传 GitHub。下载入口见 [GitHub Releases](https://github.com/Fxdtn1337/jnz/releases)。 |
-| `0.2.0` | 当前源码版本。加入构建配置、分命令帮助和新的混淆选项，移除了旧版许可证系统。 |
+| `0.2.0` | [下载 JAR 和源码](https://github.com/Fxdtn1337/jnz/releases/tag/v0.2.0)。新增构建配置、分命令帮助和混淆选项，移除了旧版许可证系统。 |
 
 各版本的功能变化见 [更新日志](CHANGELOG.md)。
 
