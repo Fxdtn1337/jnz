@@ -3,6 +3,7 @@
 JVM 字节码到 Rust 的离线编译器。它从 JAR 读取 class 并生成 Rust 源码，再由 `rustc` 编译为 JNI 动态库。普通方法默认生成 Rust 基本块，含异常处理表的方法由 Rust VM 执行。JNI 对象访问、异常路由和认证依赖项目内 Zig 编译的辅助静态库。CLI 与中文 Swing GUI 复用入口 `dev.jnz.Main`。
 
 ## 使用
+本项目需要rust+zig环境，请自行下载
 使用 Java 8 运行。Gradle 7.6.4，ASM 和 Bouncy Castle 从 `libs/` 读取。Rust 编译器优先读取 `--rustc`、`JNZ_RUSTC` 和 `out/tools/rust/bin/`，最后使用 PATH。Rust 构建还需要目标标准库和链接器。
 
 ```powershell
