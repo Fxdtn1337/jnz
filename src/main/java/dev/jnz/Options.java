@@ -9,28 +9,49 @@ final class Options {
     private final Map<String,String> values = new LinkedHashMap<String,String>();
     final boolean strict;
 
-    Options(String[] argv) {
+    Options(String[] argv) throws IOException {
         command = argv[0];
-        Set<String> allowed = new HashSet<String>(Arrays.asList("input", "include", "exclude", "report"));
-        if (command.equals("build") || command.equals("emit-rust"))
-            allowed.addAll(Arrays.asList("output", "targets", "shard-size", "module-size", "work-dir", "zig",
-                    "public-key", "license", "features", "vm-coverage", "vm-include", "jni-bridges", "pre-obfuscation",
-                    "native-backend", "rustc"));
-        else if (!command.equals("inspect")) throw new IllegalArgumentException("未知命令 " + command);
-        boolean s = false;
+        Set<String> allowed = BuildConfig.optionsFor(command);
+        Map<String, String> overrides = new LinkedHashMap<>();
+        Path config = null;
         for (int i = 1; i < argv.length; i++) {
             String token = argv[i];
-            if (token.equals("--strict")) { s = true; continue; }
             if (!token.startsWith("--")) throw new IllegalArgumentException("选项格式错误 " + token);
             int equals = token.indexOf('=');
             String name = token.substring(2, equals == -1 ? token.length() : equals);
-            if (!allowed.contains(name)) throw new IllegalArgumentException("未知选项 " + token);
+            if (token.equals("--no-strict")) {
+                putOnce(overrides, "strict", "false");
+                continue;
+            }
+            if (name.equals("strict")) {
+                String value = equals < 0 ? "true" : token.substring(equals + 1);
+                putOnce(overrides, name, Boolean.toString(BuildConfig.parseBoolean(name, value)));
+                continue;
+            }
+            if (!allowed.contains(name) && !name.equals("config")) throw new IllegalArgumentException("未知选项 " + token);
             if (equals == -1 && (i+1 >= argv.length || argv[i+1].startsWith("--")))
                 throw new IllegalArgumentException("缺少参数 " + token);
             String value = equals == -1 ? argv[++i] : token.substring(equals+1);
-            if (values.put(name, value) != null) throw new IllegalArgumentException("重复选项 --" + name);
+            if (name.equals("config")) {
+                if (config != null) throw new IllegalArgumentException("重复选项 --config");
+                if (value.trim().isEmpty()) throw new IllegalArgumentException("--config 需要配置文件路径");
+                config = Paths.get(value);
+            } else {
+                BuildConfig.validateChoice(name, value);
+                putOnce(overrides, name, value);
+            }
         }
-        strict = s;
+        if (config != null) {
+            for (Map.Entry<String, String> entry : BuildConfig.read(config).entrySet()) {
+                if (allowed.contains(entry.getKey())) values.put(entry.getKey(), entry.getValue());
+            }
+        }
+        values.putAll(overrides);
+        strict = Boolean.parseBoolean(get("strict", "false"));
+    }
+
+    private static void putOnce(Map<String, String> overrides, String name, String value) {
+        if (overrides.putIfAbsent(name, value) != null) throw new IllegalArgumentException("重复选项 --" + name);
     }
 
     String get(String name, String fallback) { return values.getOrDefault(name, fallback); }

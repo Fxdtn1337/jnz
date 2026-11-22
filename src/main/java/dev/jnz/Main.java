@@ -7,12 +7,10 @@ import dev.jnz.frontend.Program;
 import dev.jnz.frontend.MethodSelector;
 import dev.jnz.frontend.PreObfuscator;
 import dev.jnz.gui.Workbench;
-import dev.jnz.license.*;
 import dev.jnz.pack.Bundle;
 import dev.jnz.runtime.Bootstrap;
 import java.io.*;
 import java.nio.file.*;
-import java.security.PublicKey;
 import java.util.*;
 import java.util.function.Consumer;
 
@@ -28,21 +26,16 @@ public final class Main {
     }
 
     public static void execute(String[] args, Consumer<String> log) throws Exception {
-        if (args.length == 0 || args[0].equals("--help") || args[0].equals("help")) {
-            log.accept("J2Rust  •  JVM 字节码 → Rust / JNI\n"
-                    + "  gui\n  inspect --input APP.jar [--include GLOB] [--exclude GLOB] [--report FILE] [--strict]\n"
-                    + "  build --input APP.jar --output PROTECTED.jar [--include GLOB] [--exclude GLOB] [--strict]\n"
-                    + "        [--targets host|TRIPLE,...] [--zig FILE] [--shard-size 1M] [--module-size 1M]\n"
-                    + "        [--native-backend rust|zig] [--rustc FILE]\n"
-                    + "        [--vm-coverage direct|full|partial] [--vm-include GLOB]\n"
-                    + "        [--jni-bridges 4] [--pre-obfuscation full|off]\n"
-                    + "        [--public-key SPKI --license FILE --features HEX] [--report FILE] [--work-dir DIR]\n"
-                    + "  emit-rust --input APP.jar --output DIR [--include GLOB] [--exclude GLOB]\n"
-                    + "  " + Licenses.usage().replace("\n", "\n  "));
+        if (CliInfo.isVersion(args)) {
+            log.accept("J2Rust " + CliInfo.VERSION);
+            return;
+        }
+        String help = CliInfo.requestedHelp(args);
+        if (help != null) {
+            log.accept(CliInfo.help(help));
             return;
         }
         if (args[0].equals("gui")) { Workbench.open(); return; }
-        if (args[0].equals("license")) { Licenses.run(Arrays.copyOfRange(args, 1, args.length)); return; }
         Options opt = new Options(args);
         boolean emit = opt.command.equals("emit-rust");
         boolean build = opt.command.equals("build") || emit;
@@ -57,20 +50,6 @@ public final class Main {
             requireDifferent(input, output);
             requireDifferent(output, report);
         }
-        boolean licensed = opt.has("public-key") || opt.has("license") || opt.has("features");
-        byte[] key = null, envelope = null;
-        long features = 0;
-        if (licensed) {
-            for (String option : Arrays.asList("license", "public-key")) {
-                requireDifferent(opt.path(option), output);
-                requireDifferent(opt.path(option), report);
-            }
-            PublicKey publicKey = LicenseFile.readPublic(opt.path("public-key"));
-            key = LicenseFile.sec1(publicKey);
-            envelope = LicenseFile.read(opt.path("license"));
-            features = Licenses.featureMask(opt.get("features", "0"));
-            // 可在构建机上为另一台离线设备打包；设备、时钟与功能在运行时校验。
-        }
         Map<String,byte[]> entries = Archive.read(input);
         if (build) Archive.checkWritable(entries);
         Bundle.Layout layout = Bundle.plan();
@@ -79,9 +58,12 @@ public final class Main {
         PreObfuscator.Stats pre = new PreObfuscator.Stats();
         if (build) {
             String mode = opt.get("pre-obfuscation", "full");
-            if (mode.equals("full")) pre = PreObfuscator.apply(entries, include, exclude, layout);
+            if (mode.equals("full")) pre = PreObfuscator.apply(entries, include, exclude, layout,
+                    opt.get("flow-profile", "balanced"), opt.get("string-cipher", "aes"));
             else if (!mode.equals("off")) throw new IllegalArgumentException("--pre-obfuscation 使用 full 或 off");
-            log.accept("预混淆 " + pre.literals + " 个字符串，" + pre.dynamicSites + " 个字面量调用点，" + pre.jumps + " 条跳边。");
+            log.accept("预混淆 AES " + pre.aesLiterals + " 项、XOR " + pre.xorLiterals
+                    + " 项，" + pre.dynamicSites + " 个字面量调用点，" + pre.jumps + " 条跳边进入 "
+                    + pre.dispatchers + " 个分发块。");
         }
         Frontend.Result result;
         try {
@@ -96,7 +78,7 @@ public final class Main {
                 + result.initializers.size() + " 个初始化器代码段，跳过 " + result.skips.size() + " 项。");
         if (!build || result.programs.isEmpty()) {
             byte[] json = Report.render("inspected", result.programs, result.skips, Collections.<Integer>emptySet(),
-                    result.initializers, pre, 0, "");
+                    result.initializers, pre, 0, 0, "");
             Archive.publish(report, out -> out.write(json));
             log.accept("报告 " + report);
             if (build) throw new IOException("没有符合条件且可转换的方法");
@@ -149,8 +131,6 @@ public final class Main {
         if (rustc != null) log.accept("Rust " + rustc);
         if (!emit) {
             log.accept((backend.equals("rust") ? "JNI 辅助库 Zig " : "Zig ") + zig);
-            Bundle.addRuntime(entries, layout);
-            if (licensed) Bundle.addLicense(entries, key, envelope, features);
         }
         Path workParent = emit ? output : opt.has("work-dir") ? opt.path("work-dir")
                 : output.resolveSibling(output.getFileName() + ".build");
@@ -159,12 +139,12 @@ public final class Main {
         log.accept("生成源码与编译日志 " + work);
         for (List<Program> group : groups) {
             int groupId = group.get(0).id;
-            Set<Integer> classes = new LinkedHashSet<Integer>();
-            for (Program p : group) classes.add(p.classId);
+            Map<Integer, String> classes = new LinkedHashMap<>();
+            for (Program p : group) classes.putIfAbsent(p.classId, p.owner);
             Bundle.Group bridge = layout.group(groupId);
             if (emit) {
-                Path sources = RustCompiler.emit(group, work.resolve("group-" + groupId), key, features, direct,
-                        bridge.owner(), bridge.registerMethod(), bridge.verifyMethod());
+                Path sources = RustCompiler.emit(group, work.resolve("group-" + groupId), direct,
+                        bridge.owner(), bridge.registerMethod());
                 log.accept("Rust 源码 " + sources);
                 continue;
             }
@@ -173,17 +153,21 @@ public final class Main {
                 log.accept("编译 " + target + "，模块 " + groupId + "，" + group.size() + " 个方法");
                 Path directory = work.resolve(target).resolve("group-" + groupId);
                 List<Path> library = backend.equals("rust")
-                        ? RustCompiler.compile(group, directory, target, zig, rustc, key, features, direct,
-                                bridge.owner(), bridge.registerMethod(), bridge.verifyMethod())
-                        : NativeCompiler.compile(group, directory, target, zig, key, features, direct,
-                                bridge.owner(), bridge.registerMethod(), bridge.verifyMethod());
+                        ? RustCompiler.compile(group, directory, target, zig, rustc, direct,
+                                bridge.owner(), bridge.registerMethod())
+                        : NativeCompiler.compile(group, directory, target, zig, direct,
+                                bridge.owner(), bridge.registerMethod());
                 if (library.size() != 1) throw new IOException("模块产物数量异常 " + directory);
-                Bundle.addModule(entries, target, groupId, library.get(0), chunk);
+                Bundle.addModule(entries, layout, target, groupId, library.get(0), chunk);
             }
         }
-        if (!emit) Frontend.updateModulePackages(entries, layout.bootstrapOwner());
+        if (!emit) {
+            Bundle.addRuntime(entries, layout);
+            Frontend.updateModulePackages(entries, layout.bootstrapOwner());
+            log.accept("已注入并处理 " + layout.runtimeClassCount() + " 个 Loader 和 JNI 桥接类。");
+        }
         byte[] json = Report.render(emit ? "rust-source" : "built", result.programs, result.skips, direct,
-                result.initializers, pre, groups.size(), backend);
+                result.initializers, pre, groups.size(), emit ? 0 : layout.runtimeClassCount(), backend);
         // 报告单独交付，避免在分发 JAR 中附带完整的源码方法映射。
         Archive.publish(report, out -> out.write(json));
         if (emit) {

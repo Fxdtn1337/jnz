@@ -105,12 +105,37 @@ public final class Linkage {
     }
 
     private static boolean isContextSensitive(MethodInsnNode method) {
-        if (method.owner.equals("java/lang/invoke/MethodHandle")
-                && (method.name.equals("invokeExact") || method.name.equals("invoke"))) return false;
+        if (method.getOpcode() == INVOKEVIRTUAL) {
+            if (method.owner.equals("java/lang/invoke/MethodHandle")
+                    && (method.name.equals("invokeExact") || method.name.equals("invoke"))) return false;
+            if (method.owner.equals("java/lang/invoke/VarHandle") && isVarHandleAccess(method.name)) return false;
+        }
         // JNI adds one native frame and this gateway adds a Java frame; keep known stack-sensitive calls in Java.
         return method.owner.startsWith("java/lang/invoke/") || method.owner.startsWith("java/lang/reflect/")
                 || method.owner.equals("java/lang/Class") || method.owner.equals("java/lang/ClassLoader")
                 || method.owner.startsWith("jdk/internal/reflect/") || method.owner.startsWith("sun/reflect/");
+    }
+
+    /** VarHandle 探测和更新使用调用点描述符，交给同一个 JVM 符号指令链接。 */
+    private static boolean isVarHandleAccess(String name) {
+        switch (name) {
+            case "get": case "set":
+            case "getVolatile": case "setVolatile":
+            case "getOpaque": case "setOpaque":
+            case "getAcquire": case "setRelease":
+            case "compareAndSet":
+            case "compareAndExchange": case "compareAndExchangeAcquire": case "compareAndExchangeRelease":
+            case "weakCompareAndSetPlain": case "weakCompareAndSet":
+            case "weakCompareAndSetAcquire": case "weakCompareAndSetRelease":
+            case "getAndSet": case "getAndSetAcquire": case "getAndSetRelease":
+            case "getAndAdd": case "getAndAddAcquire": case "getAndAddRelease":
+            case "getAndBitwiseOr": case "getAndBitwiseOrAcquire": case "getAndBitwiseOrRelease":
+            case "getAndBitwiseAnd": case "getAndBitwiseAndAcquire": case "getAndBitwiseAndRelease":
+            case "getAndBitwiseXor": case "getAndBitwiseXorAcquire": case "getAndBitwiseXorRelease":
+                return true;
+            default:
+                return false;
+        }
     }
 
     void write(ClassVisitor outputClass) {

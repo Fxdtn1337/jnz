@@ -66,25 +66,3 @@ pub fn registerPacked(env: Env, cls: Ref, id: u32, blob: []const u8, key: *const
 pub fn hasException(env: Env) bool {
     return entry(*const fn (Env) callconv(.c) u8, env, 228)(env) != 0;
 }
-
-fn copyArray(env: Env, array: Ref, dest: []u8) bool {
-    if (array == null) return false;
-    const length = entry(*const fn (Env, Ref) callconv(.c) i32, env, 171);
-    if (length(env, array) != @as(i32, @intCast(dest.len))) return false;
-    const region = entry(*const fn (Env, Ref, i32, i32, [*]u8) callconv(.c) void, env, 200);
-    region(env, array, 0, @intCast(dest.len), dest.ptr);
-    return !hasException(env);
-}
-
-pub fn verifyLicense(env: Env, pinned: []const u8, required: u64, key_array: Ref, body_array: Ref, sig_array: Ref) u8 {
-    const P256 = std.crypto.sign.ecdsa.EcdsaP256Sha256;
-    var sec1: [65]u8 = undefined;
-    var body: [56]u8 = undefined;
-    var signature: [64]u8 = undefined;
-    if (!copyArray(env, key_array, &sec1) or !copyArray(env, body_array, &body) or !copyArray(env, sig_array, &signature)) return 0;
-    if (sec1[0] != 4 or !std.mem.eql(u8, &sec1, pinned)) return 0;
-    if (std.mem.readInt(u64, body[48..56], .big) & required != required) return 0;
-    const key = P256.PublicKey.fromSec1(&sec1) catch return 0;
-    P256.Signature.fromBytes(signature).verify(&body, key) catch return 0;
-    return 1;
-}

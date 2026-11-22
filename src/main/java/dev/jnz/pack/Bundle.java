@@ -1,6 +1,10 @@
 package dev.jnz.pack;
 
 import dev.jnz.protect.LiteralMask;
+import dev.jnz.runtime.DigestCodec;
+import dev.jnz.runtime.ResourceLimits;
+import dev.jnz.runtime.ResourceNamespace;
+import dev.jnz.runtime.ResourcePaths;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
 
@@ -12,13 +16,15 @@ import java.util.*;
 
 /** 平台模块索引、可校验资源分块以及 JVM 绑定声明。 */
 public final class Bundle {
-    public static final String ROOT = "META-INF/jnz/";
     static final String RUNTIME = "dev/jnz/runtime/";
     private Bundle() {}
 
     /** 一次构建中所有目标平台共享同一组 JVM/JNI ABI 名称。 */
     public static final class Layout {
         private final SecureRandom random = new SecureRandom();
+        final long seedLeft = random.nextLong(), seedRight = random.nextLong();
+        final String resourceRoot = ResourceNamespace.derive(seedLeft, seedRight);
+        private final Set<String> metadata = new TreeSet<>();
         private final Set<String> names = new HashSet<>();
         private final Map<Integer, Group> groups = new HashMap<>();
         private final Map<String, String> templates = new LinkedHashMap<>();
@@ -36,8 +42,9 @@ public final class Bundle {
         public String literalOwner() { return templates.get(RuntimeObfuscator.LITERAL_SITE); }
         public String literalBootstrap() { return literalBootstrap; }
         public String literalDecode() { return literalDecode; }
+        public int runtimeClassCount() { return templates.size() + groups.size(); }
         public Group group(int id) {
-            return groups.computeIfAbsent(id, key -> new Group(RUNTIME + name('R'), name('m'), name('m')));
+            return groups.computeIfAbsent(id, key -> new Group(RUNTIME + name('R'), name('m')));
         }
 
         Map<String, String> templates() { return Collections.unmodifiableMap(templates); }
@@ -66,17 +73,15 @@ public final class Bundle {
     }
 
     public static final class Group {
-        private final String owner, registerMethod, verifyMethod;
+        private final String owner, registerMethod;
 
-        private Group(String owner, String registerMethod, String verifyMethod) {
+        private Group(String owner, String registerMethod) {
             this.owner = owner;
             this.registerMethod = registerMethod;
-            this.verifyMethod = verifyMethod;
         }
 
         public String owner() { return owner; }
         public String registerMethod() { return registerMethod; }
-        public String verifyMethod() { return verifyMethod; }
     }
 
     public static Layout plan() {
@@ -84,28 +89,33 @@ public final class Bundle {
     }
 
     public static void addRuntime(Map<String, byte[]> entries, Layout layout) throws IOException {
-        RuntimeObfuscator.emit(entries, layout);
+        byte[] catalog = buildCatalog(entries, layout);
+        put(entries, layout.resourceRoot + ResourcePaths.catalog(), catalog);
+        RuntimeObfuscator.emit(entries, layout, DigestCodec.hex(DigestCodec.hash(catalog)));
     }
 
-    public static void addLicense(Map<String, byte[]> entries, byte[] key, byte[] license, long features)
-            throws IOException {
-        if (key.length != 65 || license.length != 120) throw new IOException("公钥或许可证长度无效");
+    private static byte[] buildCatalog(Map<String, byte[]> entries, Layout layout) throws IOException {
+        if (layout.metadata.isEmpty() || layout.metadata.size() > ResourceLimits.CATALOG_RECORDS)
+            throw new IOException("模块目录条目数超出支持范围");
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(bytes);
-        out.writeLong(features);
-        out.write(key);
-        out.write(license);
-        put(entries, ROOT + "license.bin", bytes.toByteArray());
+        out.writeInt(0x4a4e4332);
+        out.writeInt(layout.metadata.size());
+        for (String path : layout.metadata) {
+            out.writeUTF(path);
+            out.write(DigestCodec.hash(entries.get(layout.resourceRoot + path)));
+        }
+        if (bytes.size() > ResourceLimits.CATALOG_BYTES) throw new IOException("模块目录长度超限");
+        return bytes.toByteArray();
     }
 
-    public static void addGroup(Map<String, byte[]> entries, Layout layout, int groupId, Collection<Integer> classIds)
+    public static void addGroup(Map<String, byte[]> entries, Layout layout, int groupId, Map<Integer, String> classes)
             throws IOException {
         Group group = layout.group(groupId);
         ClassWriter writer = new ClassWriter(0);
         writer.visit(Opcodes.V1_8, Opcodes.ACC_FINAL | Opcodes.ACC_SUPER, group.owner(), null, "java/lang/Object", null);
         int flags = Opcodes.ACC_STATIC | Opcodes.ACC_NATIVE;
         writer.visitMethod(flags, group.registerMethod(), "(Ljava/lang/Class;I)V", null, null).visitEnd();
-        writer.visitMethod(flags, group.verifyMethod(), "([B[B[B)Z", null, null).visitEnd();
         writer.visitEnd();
         put(entries, group.owner() + ".class", writer.toByteArray());
         ByteArrayOutputStream binding = new ByteArrayOutputStream();
@@ -113,23 +123,25 @@ public final class Bundle {
         int seed = layout.seed();
         entry.writeInt(seed);
         String name = group.owner().substring(RUNTIME.length());
-        entry.writeUTF(LiteralMask.encode(name + '|' + group.registerMethod() + '|' + group.verifyMethod(), seed));
-        put(entries, ROOT + "groups/" + groupId, binding.toByteArray());
-        for (int classId : classIds) {
+        entry.writeUTF(LiteralMask.encode(name + '|' + group.registerMethod(), seed));
+        putMetadata(entries, layout, ResourcePaths.groupRoute(groupId), binding.toByteArray());
+        for (Map.Entry<Integer, String> route : classes.entrySet()) {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            new DataOutputStream(bytes).writeInt(groupId);
-            put(entries, ROOT + "classes/" + classId, bytes.toByteArray());
+            DataOutputStream out = new DataOutputStream(bytes);
+            out.writeInt(groupId);
+            out.writeUTF(route.getValue().replace('/', '.'));
+            putMetadata(entries, layout, ResourcePaths.classRoute(route.getKey()), bytes.toByteArray());
         }
     }
 
-    public static void addModule(Map<String, byte[]> entries, String target, int groupId, Path library,
+    public static void addModule(Map<String, byte[]> entries, Layout layout, String target, int groupId, Path library,
                                  int chunkSize) throws IOException {
         if (chunkSize <= 0) throw new IOException("分片长度必须为正");
-        String prefix = ROOT + target + "/" + groupId + "/";
-        MessageDigest digest;
-        try { digest = MessageDigest.getInstance("SHA-256"); }
-        catch (NoSuchAlgorithmException e) { throw new AssertionError(e); }
-        byte[] block = new byte[chunkSize];
+        long fileSize = Files.size(library);
+        if (fileSize < 1 || fileSize > ResourceLimits.MODULE_BYTES || 1 + (fileSize - 1) / chunkSize > ResourceLimits.MODULE_BLOCKS)
+            throw new IOException("模块长度或分片数超限 " + library);
+        MessageDigest digest = DigestCodec.sha256();
+        byte[] block = new byte[(int) Math.min(fileSize, chunkSize)];
         long size = 0;
         int count = 0;
         try (InputStream input = Files.newInputStream(library)) {
@@ -139,18 +151,24 @@ public final class Bundle {
                     length += n;
                 if (length == 0) break;
                 digest.update(block, 0, length);
-                put(entries, prefix + count++ + ".part", Arrays.copyOf(block, length));
+                put(entries, layout.resourceRoot + ResourcePaths.chunk(target, groupId, count++), Arrays.copyOf(block, length));
                 size += length;
             }
         }
-        if (count == 0) throw new IOException("Zig 输出空库 " + library);
+        if (size != fileSize || count > ResourceLimits.MODULE_BLOCKS) throw new IOException("构建期间模块长度发生变化 " + library);
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(bytes);
         out.writeInt(0x4a4e5a31);
         out.writeInt(count);
         out.writeLong(size);
         out.write(digest.digest());
-        put(entries, prefix + "index.bin", bytes.toByteArray());
+        putMetadata(entries, layout, ResourcePaths.moduleIndex(target, groupId), bytes.toByteArray());
+    }
+
+    private static void putMetadata(Map<String, byte[]> entries, Layout layout, String path, byte[] data) throws IOException {
+        if (data.length > ResourceLimits.METADATA_BYTES) throw new IOException("模块元数据长度超限 " + path);
+        put(entries, layout.resourceRoot + path, data);
+        layout.metadata.add(path);
     }
 
     public static void put(Map<String, byte[]> entries, String name, byte[] data) throws IOException {

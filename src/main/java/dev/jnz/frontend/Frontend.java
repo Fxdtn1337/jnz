@@ -113,7 +113,6 @@ public final class Frontend implements Opcodes {
         int slash = bootstrapOwner.lastIndexOf('/');
         if (slash > 0 && entries.containsKey(bootstrapOwner + ".class"))
             injected.add(bootstrapOwner.substring(0, slash));
-        if (entries.containsKey("dev/jnz/license/DeviceFingerprint.class")) injected.add("dev/jnz/license");
         if (injected.isEmpty()) return;
         for (Map.Entry<String, byte[]> entry : entries.entrySet()) {
             String name = entry.getKey();

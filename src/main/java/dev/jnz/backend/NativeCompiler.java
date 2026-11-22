@@ -22,39 +22,11 @@ public final class NativeCompiler {
             "x86_64-linux-musl", "aarch64-linux-musl", "x86_64-macos", "aarch64-macos")));
     private NativeCompiler() {}
 
-    public static List<Path> compile(List<Program> programs, Path work, String target, String zig)
-            throws IOException, InterruptedException {
-        return compile(programs, work, target, zig, null);
-    }
-
-    public static List<Path> compile(List<Program> programs, Path work, String target, String zig, byte[] vendorKeySec1)
-            throws IOException, InterruptedException {
-        return compile(programs, work, target, zig, vendorKeySec1, 0L);
-    }
-
     public static List<Path> compile(List<Program> programs, Path work, String target, String zig,
-                                     byte[] vendorKeySec1, long requiredFeatures) throws IOException, InterruptedException {
-        return compile(programs, work, target, zig, vendorKeySec1, requiredFeatures, Collections.<Integer>emptySet());
-    }
-
-    public static List<Path> compile(List<Program> programs, Path work, String target, String zig,
-                                     byte[] vendorKeySec1, long requiredFeatures, Set<Integer> directIds)
-            throws IOException, InterruptedException {
-        if (programs.isEmpty()) return Collections.emptyList();
-        return compile(programs, work, target, zig, vendorKeySec1, requiredFeatures, directIds,
-                "dev/jnz/runtime/Group" + programs.get(0).id, "register", "verifyLicense");
-    }
-
-    public static List<Path> compile(List<Program> programs, Path work, String target, String zig,
-                                     byte[] vendorKeySec1, long requiredFeatures, Set<Integer> directIds,
-                                     String bridgeOwner, String registerMethod, String verifyMethod)
+                                     Set<Integer> directIds, String bridgeOwner, String registerMethod)
             throws IOException, InterruptedException {
         if (!TARGETS.contains(target)) throw new IOException("Unsupported Zig target: " + target);
         if (programs.isEmpty()) return Collections.emptyList();
-        if (vendorKeySec1 != null && vendorKeySec1.length != 0 &&
-                (vendorKeySec1.length != 65 || vendorKeySec1[0] != 4)) {
-            throw new IOException("Expected an uncompressed SEC1 P-256 public key");
-        }
         Files.createDirectories(work);
         Path directory = Files.createTempDirectory(work.toAbsolutePath(), "module-");
         for (String template : Arrays.asList("vm.zig", "jni.zig", "links.zig", "handlers.zig", "build.zig")) {
@@ -75,9 +47,8 @@ public final class NativeCompiler {
             if (!directIds.contains(p.id)) encrypted.write(p, directory);
             if (!p.links.isEmpty()) encrypted.writeLinks(p, directory);
         }
-        byte[] pinned = vendorKeySec1 == null ? new byte[0] : vendorKeySec1;
-        String source = ZigSource.generate(programs, encrypted, pinned, requiredFeatures, random, directory, directIds,
-                jniSymbol(bridgeOwner, registerMethod), jniSymbol(bridgeOwner, verifyMethod));
+        String source = ZigSource.generate(programs, encrypted, random, directory, directIds,
+                jniSymbol(bridgeOwner, registerMethod));
         Files.write(directory.resolve("module.zig"), source.getBytes(StandardCharsets.UTF_8));
         String extension = target.contains("-windows-") ? ".dll" : target.endsWith("-macos") ? ".dylib" : ".so";
         String fileName = "jnz_" + UUID.randomUUID().toString().replace("-", "") + extension;

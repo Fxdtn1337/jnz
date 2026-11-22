@@ -15,14 +15,16 @@ final class ModuleIndex {
         this.digest = digest;
     }
 
-    static ModuleIndex read(String prefix) throws IOException {
-        try (DataInputStream input = PackedResources.require(prefix + "index.bin")) {
+    static ModuleIndex read(String name) throws IOException {
+        try (DataInputStream input = MetadataCatalog.open(name)) {
             if (input.readInt() != 0x4a4e5a31) throw new IOException("未知模块索引版本");
             int count = input.readInt();
             long size = input.readLong();
-            byte[] digest = new byte[32];
+            byte[] digest = new byte[ResourceLimits.DIGEST_BYTES];
             input.readFully(digest);
-            if (input.read() != -1 || count < 1 || size < count) throw new IOException("模块索引损坏");
+            BinaryStream.end(input, name);
+            if (count < 1 || count > ResourceLimits.MODULE_BLOCKS || size < count || size > ResourceLimits.MODULE_BYTES)
+                throw new IOException("模块索引损坏");
             return new ModuleIndex(count, size, digest);
         }
     }

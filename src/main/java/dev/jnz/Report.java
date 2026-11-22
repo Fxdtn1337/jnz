@@ -12,15 +12,22 @@ final class Report {
     private Report() {}
     static byte[] render(String status, List<Program> programs, List<String[]> skips) {
         return render(status, programs, skips, Collections.<Integer>emptySet(), Collections.<Frontend.Initializer>emptyList(),
-                new PreObfuscator.Stats(), 0, "");
+                new PreObfuscator.Stats(), 0, 0, "");
     }
     static byte[] render(String status, List<Program> programs, List<String[]> skips, Set<Integer> direct,
-                         List<Frontend.Initializer> initializers, PreObfuscator.Stats pre, int bridges, String nativeBackend) {
+                         List<Frontend.Initializer> initializers, PreObfuscator.Stats pre, int bridges,
+                         int loaderClasses, String nativeBackend) {
         StringBuilder json = new StringBuilder("{\n  \"status\": ").append(quote(status))
+                .append(",\n  \"version\": ").append(quote(CliInfo.VERSION))
                 .append(",\n  \"jniBridges\": ").append(bridges)
+                .append(",\n  \"loaderClasses\": ").append(loaderClasses)
                 .append(",\n  \"nativeBackend\": ").append(quote(nativeBackend))
                 .append(",\n  \"preObfuscation\": {\"literals\":").append(pre.literals)
+                .append(",\"aesLiterals\":").append(pre.aesLiterals)
+                .append(",\"xorLiterals\":").append(pre.xorLiterals)
                 .append(",\"dynamicSites\":").append(pre.dynamicSites).append(",\"jumps\":").append(pre.jumps)
+                .append(",\"dispatchers\":").append(pre.dispatchers)
+                .append(",\"skippedClasses\":").append(pre.skippedClasses)
                 .append("},\n  \"methods\": [");
         for (int i=0; i<programs.size(); i++) {
             Program p = programs.get(i);

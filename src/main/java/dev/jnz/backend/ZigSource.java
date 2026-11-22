@@ -16,21 +16,18 @@ import java.util.Set;
 final class ZigSource {
     private ZigSource() {}
 
-    static String generate(List<Program> programs, EncryptedPrograms encrypted, byte[] pinned, long requiredFeatures,
+    static String generate(List<Program> programs, EncryptedPrograms encrypted,
                            SecureRandom random, Path directory, Set<Integer> directIds,
-                           String registerSymbol, String verifySymbol) throws IOException {
+                           String registerSymbol) throws IOException {
         StringBuilder out = new StringBuilder(
-                "const std = @import(\"std\");\nconst vm = @import(\"vm.zig\");\nconst jni = @import(\"jni.zig\");\n");
+                "const vm = @import(\"vm.zig\");\nconst jni = @import(\"jni.zig\");\n");
         byte[] mask = new byte[256], values = new byte[256];
         random.nextBytes(mask);
         for (int i = 0; i < 256; i++) values[i] = (byte) (encrypted.decode[i] ^ mask[i]);
         bytes(out, "key", encrypted.key);
         bytes(out, "mask", mask);
         bytes(out, "values", values);
-        bytes(out, "pinned", pinned);
-        out.append("const required_features: u64 = ").append(Long.toUnsignedString(requiredFeatures)).append(";\n");
-        out.append("const decode: vm.Decode = .{ .mask = &mask, .values = &values };\n")
-           .append("var verified = std.atomic.Value(bool).init(false);\n");
+        out.append("const decode: vm.Decode = .{ .mask = &mask, .values = &values };\n");
         List<Program> layout = new ArrayList<>(programs);
         Collections.shuffle(layout, random);
         for (Program program : layout) {
@@ -41,13 +38,8 @@ final class ZigSource {
 
         Map<Integer, List<Program>> owners = new LinkedHashMap<>();
         for (Program program : programs) owners.computeIfAbsent(program.classId, k -> new ArrayList<>()).add(program);
-        out.append("export fn ").append(verifySymbol)
-           .append("(env: jni.Env, _: jni.Ref, public: jni.Ref, body: jni.Ref, signature: jni.Ref) callconv(.c) u8 {\n")
-           .append("    const ok = jni.verifyLicense(env, &pinned, required_features, public, body, signature);\n")
-           .append("    if (ok != 0) verified.store(true, .release);\n    return ok;\n}\n")
-           .append("export fn ").append(registerSymbol)
+        out.append("export fn ").append(registerSymbol)
            .append("(env: jni.Env, _: jni.Ref, cls: jni.Ref, id: i32) callconv(.c) void {\n")
-           .append("    if (pinned.len != 0 and !verified.load(.acquire)) return jni.raise(env, \"java/lang/SecurityException\", \"license required\");\n")
            .append("    switch (id) {\n");
         for (List<Program> methods : owners.values()) {
             int classId = methods.get(0).classId;

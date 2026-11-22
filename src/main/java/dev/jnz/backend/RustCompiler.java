@@ -24,12 +24,10 @@ public final class RustCompiler {
     private RustCompiler() {}
 
     public static List<Path> compile(List<Program> programs, Path work, String target, String zig, String rustc,
-                                     byte[] vendorKeySec1, long requiredFeatures, Set<Integer> directIds,
-                                     String bridgeOwner, String registerMethod, String verifyMethod)
+                                     Set<Integer> directIds, String bridgeOwner, String registerMethod)
             throws IOException, InterruptedException {
         if (programs.isEmpty()) return Collections.emptyList();
-        Path directory = emit(programs, work, vendorKeySec1, requiredFeatures, directIds,
-                bridgeOwner, registerMethod, verifyMethod);
+        Path directory = emit(programs, work, directIds, bridgeOwner, registerMethod);
         String compiler = executable(rustc, "rustc");
         String version = run(directory, "rustc-version.log", "Rust compiler", compiler, "-vV");
         String host = null;
@@ -78,13 +76,10 @@ public final class RustCompiler {
     }
 
     /** 可在未配置 rustc 的机器上生成完整可移交源码与认证程序数据。 */
-    public static Path emit(List<Program> programs, Path work, byte[] vendorKeySec1, long requiredFeatures,
-                            Set<Integer> directIds, String bridgeOwner, String registerMethod, String verifyMethod)
+    public static Path emit(List<Program> programs, Path work,
+                            Set<Integer> directIds, String bridgeOwner, String registerMethod)
             throws IOException {
         if (programs.isEmpty()) throw new IOException("Rust module has no methods");
-        byte[] pinned = vendorKeySec1 == null ? new byte[0] : vendorKeySec1;
-        if (pinned.length != 0 && (pinned.length != 65 || pinned[0] != 4))
-            throw new IOException("Expected an uncompressed SEC1 P-256 public key");
         Files.createDirectories(work);
         Path directory = Files.createTempDirectory(work.toAbsolutePath(), "rust-module-");
         for (String template : Arrays.asList("vm.zig", "jni.zig", "links.zig", "handlers.zig")) {
@@ -104,8 +99,8 @@ public final class RustCompiler {
             if (!directIds.contains(p.id)) data.write(p, directory);
             if (!p.links.isEmpty()) data.writeLinks(p, directory);
         }
-        String source = RustSource.generate(programs, data, pinned, requiredFeatures, random, directory, directIds,
-                jniSymbol(bridgeOwner, registerMethod), jniSymbol(bridgeOwner, verifyMethod));
+        String source = RustSource.generate(programs, data, random, directory, directIds,
+                jniSymbol(bridgeOwner, registerMethod));
         Files.write(directory.resolve("module.rs"), source.getBytes(StandardCharsets.UTF_8));
         return directory;
     }

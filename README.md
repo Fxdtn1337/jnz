@@ -1,55 +1,89 @@
 # J2Rust
 
-JVM 字节码到 Rust 的离线编译器。它从 JAR 读取 class 并生成 Rust 源码，再由 `rustc` 编译为 JNI 动态库。普通方法默认生成 Rust 基本块，含异常处理表的方法由 Rust VM 执行。JNI 对象访问、异常路由和认证依赖项目内 Zig 编译的辅助静态库。CLI 与中文 Swing GUI 复用入口 `dev.jnz.Main`。
+<img src="src/main/resources/dev/jnz/gui/logo.png" alt="J2Rust Logo" width="112">
 
-## 使用
-本项目需要rust+zig环境，请自行下载
-使用 Java 8 运行。Gradle 7.6.4，ASM 和 Bouncy Castle 从 `libs/` 读取。Rust 编译器优先读取 `--rustc`、`JNZ_RUSTC` 和 `out/tools/rust/bin/`，最后使用 PATH。Rust 构建还需要目标标准库和链接器。
+J2Rust 把 JAR 里的 Java 方法编译成 Rust 和 JNI 动态库。构建完成后，调用方仍然使用原来的 JAR 入口。想知道哪些方法会被转换，可以先运行 `inspect`。想看生成的 Rust，可以运行 `emit-rust`。
+
+项目最初由 GPT-6.2-sol 编写。
+
+## Releases
+
+| 版本 | 说明 |
+| --- | --- |
+| `0.1.0` | 首版已上传 GitHub。下载入口见 [GitHub Releases](https://github.com/Fxdtn1337/jnz/releases)。 |
+| `0.2.0` | 当前源码版本。加入构建配置、分命令帮助和新的混淆选项，移除了旧版许可证系统。 |
+
+各版本的功能变化见 [更新日志](CHANGELOG.md)。
+
+## 快速开始
+
+准备 Java 8 或兼容的较新 JDK、Rust 工具链和 Zig。Rust 需要安装目标平台的标准库和链接器。编译工具依赖的 Java 库在 `libs/`，已缓存 Gradle 7.6.4 的环境可离线构建。
 
 ```powershell
 .\gradlew.bat --offline build
-java -jar out\j2rust.jar --help
+java -jar out\j2rust.jar --version
 java -jar out\j2rust.jar gui
 ```
 
-辅助 Zig 优先查找工作目录或编译器 JAR 附近的 `zig.exe`、`zig` 或 `zig*/`，其次读取 `JNZ_ZIG` 和 PATH。也可用 `--zig` 指定。业务 JAR 运行时只需要对应平台的 JVM。
-
-## 检查与构建
+仓库附带一个 SnakeGame 样例。下面的命令先查看 `Window`，再使用仓库内的配置构建整个样例。
 
 ```powershell
-java -jar out\j2rust.jar inspect --input demo\SnakeGame.jar --include 'Window'
-java -jar out\j2rust.jar build --input demo\SnakeGame.jar --output out\SnakeGame-rust.jar --jni-bridges 4
-java -Xverify:all -jar out\SnakeGame-rust.jar
-java -jar out\j2rust.jar emit-rust --input demo\SnakeGame.jar --output out\SnakeGame-rust-source --jni-bridges 4
+java -jar out\j2rust.jar inspect --input demo\SnakeGame.jar --include Window
+java -jar out\j2rust.jar build --config j2rust.example.properties
+java -Xverify:all -jar out\SnakeGame-configured.jar
 ```
 
-| 参数                                  | 行为                                                                                                                               |
-|---------------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
-| `--include`、`--exclude`              | 使用逗号分隔的内部类名、`类#方法`、`类#方法(参数)返回值` 或 `@包名/注解名`。支持 `*` 和 `?`。先包含再排除。                        |
-| `--strict`                            | 有已选择但不可转换的方法时写报告，退出并保留已有输出。使用精确规则可以避开构造器和引导代码。                                       |
-| `--vm-coverage direct\|full\|partial` | Rust 默认 `direct`。`full` 让所有方法进入 VM。使用 `partial --vm-include GLOB` 选定进入 VM 的方法。含异常处理表的方法始终使用 VM。 |
-| `--native-backend rust\|zig`          | Rust 是默认后端。Zig 是可明确选择的兼容后端。                                                                                      |
-| `--jni-bridges 4`                     | 在当前按包和大小的分组上继续拆分为不同的 JNI 桥接模块。每个类保留在一个组。                                                        |
-| `--pre-obfuscation full\|off`         | 默认在转换前编码所选方法的字符串字面量、生成调用点并改写跳边。Loader 在打包时独立处理。                                            |
-| `--targets host`                      | 可改为 `x86_64-windows-gnu,aarch64-linux-musl` 等逗号分隔的目标列表。                                                              |
-| `--module-size 1M`                    | 同包内按 IR 大小估计切分独立库，类是分组的最小单位。                                                                               |
-| `--shard-size 1M`                     | JAR 中单个原生资源块的字节上限，支持 `K` 和 `M` 后缀。                                                                             |
-| `--report FILE`                       | 输出转换清单与跳过原因。默认路径为 `<目标 JAR>.reports/frontend-skips.json`，检查命令使用输入 JAR 名。                             |
-| `--work-dir DIR`                      | 存放生成的 `module.rs`、`vm.rs`、认证程序数据、独立动态库和编译日志。默认路径为 `<目标 JAR>.build/`。                              |
-
-当前支持数组、多维数组、捕获 Lambda、方法引用、动态拼接、动态常量、类型检查、对象创建、异常处理和同步块等字节码。可安全切分的 `<init>` 和 `<clinit>` 提取为 native 辅助方法。原始构造调用和必须在初始化器内执行的 final 字段写入留在 JVM。输入支持 major 49–71，低版本启动器按原类保留。输入已签名时应先从签名前的 JAR 构建，再为输出重新签名。
-
-输出 Loader 按资源读取、平台识别、校验装载、逐类绑定、字面量还原和许可证等职责拆分。每次构建重新生成内部类名、成员名、JNI 桥接符号和字符串掩码，并且改写 Loader 的跳边。
-
-## 离线许可证
+如果只想看 Rust 源码，直接导出即可。方法 ID 和原始签名在同目录下的 `frontend.json`。
 
 ```powershell
-$hwid = java -jar out\j2rust.jar license fingerprint
-$expiry = [DateTimeOffset]::UtcNow.AddDays(30).ToUnixTimeSeconds()
-java -jar out\j2rust.jar license keygen out\vendor.pk8 out\vendor.spki
-java -jar out\j2rust.jar license issue out\vendor.pk8 $hwid $expiry 5 out\license.dat
-java -jar out\j2rust.jar license verify out\vendor.spki out\license.dat $hwid 1
-java -jar out\j2rust.jar build --input out\input.jar --output out\licensed.jar --include 'example/*#compute*' --public-key out\vendor.spki --license out\license.dat --features 1
+java -jar out\j2rust.jar emit-rust --input demo\SnakeGame.jar --output out\SnakeGame-source --include Window
 ```
 
-签发端保存 PKCS#8 私钥。编译端使用 SPKI 公钥和签发结果。许可校验发生在保护类首次绑定 native 方法时。
+## 配置文件
+
+复制 [j2rust.example.properties](j2rust.example.properties) 后修改输入、输出和保护选项。文件使用 UTF-8 Java properties 格式，键名就是命令行选项去掉前缀 `--`。相对路径从配置文件的位置算起。Windows 路径可用 `C:/tools/rust/bin/rustc.exe` 的写法。
+
+```properties
+input=demo/SnakeGame.jar
+output=out/SnakeGame-configured.jar
+native-backend=rust
+flow-profile=balanced
+string-cipher=aes
+jni-bridges=4
+strict=false
+```
+
+命令行同名选项优先。例如单次构建可用 `--flow-profile strong`，也可用 `--no-strict` 关闭配置中的严格模式。同一份构建配置可传给 `inspect`，它只使用检查相关的键。配置项名拼写错误或重复时，CLI 会显示对应文件和键名。
+
+## 命令和帮助
+
+```powershell
+java -jar out\j2rust.jar --help
+java -jar out\j2rust.jar help build
+java -jar out\j2rust.jar emit-rust --help
+```
+
+| 选项 | 用途 |
+| --- | --- |
+| `--include` / `--exclude` | 用逗号分隔类名、`类#方法`、`类#方法(参数)返回值`或 `@包名/注解名`。支持 `*`、`?`。 |
+| `--strict` / `--no-strict` | 设置遇到已选但无法转换的方法时是否中止。普通模式继续构建并在报告中给出原因。 |
+| `--native-backend rust\|zig` | 默认 Rust，Zig 兼容后端可显式选择。Rust 的 JNI 辅助静态库也由 Zig 编译。 |
+| `--vm-coverage direct\|full\|partial` | Rust 默认直编，含异常表的方法交给 VM。使用 `partial --vm-include GLOB` 手动选定 VM 方法。 |
+| `--flow-profile off\|balanced\|strong` | 默认 `balanced`，把符合条件的跳边汇入按键分派。增强档还处理符合条件的 switch 分支。 |
+| `--string-cipher off\|xor\|aes` | 默认 AES-GCM。还原所需的数据随输出分发，适合保护字面量。 |
+| `--jni-bridges N` | 以类为单位继续划分模块，每组生成独立 JNI 桥，模块实际数量会受已选类及原有分组影响。 |
+| `--targets` | 默认为 `host`。交叉编译传入目标列表，例如 `x86_64-windows-gnu,aarch64-linux-musl`。 |
+| `--report` / `--work-dir` | 分别指定 JSON 报告和生成源码、动态库、日志的目录。 |
+
+## 转换边界
+
+数组与多维数组、捕获 Lambda、方法引用、动态字符串拼接、动态常量和 VarHandle 访问模式已有差分用例。带异常表的方法在 Rust VM 中运行。构造器可提取符合条件的代码段，父类或同类构造调用及 JVM 要求留在初始化器中的 final 写入仍在原位置。特定 JAR 的覆盖情况以报告中的方法、初始化器和跳过明细为准。
+
+打包时，ASM 注入 32 个 Loader 运行时类及每组独立的 JNI 桥。每次构建重新计算资源命名空间和分片名。Loader 校验目录、路由、索引与模块，再交由 JVM 的标准加载入口处理。
+
+- 默认报告位于 `<输出 JAR>.reports/frontend-skips.json`，可以先在里面查方法名、原因和生成 ID。
+- Rust 和 Zig 可通过 `--rustc` 与 `--zig` 指定。遇到链接失败时，在构建目录查看 `rustc.log` 和 `zig-support.log`。
+- 受保护 JAR 运行时需要与 JNI 动态库匹配的 JVM 架构。用 `java -Xverify:all -jar ...` 验证实际入口。
+- 输入已经签名时，先转换签名前的 JAR，然后对输出重新签名。
+
+更多实现细节见 [技术规格](docs/TECHNICAL-SPEC.md)。

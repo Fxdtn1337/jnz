@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'dev.jnz'
-version = '0.1.0'
+version = '0.2.0'
 
 java {
     sourceCompatibility = JavaVersion.VERSION_1_8
@@ -24,7 +24,7 @@ tasks.withType(JavaCompile).configureEach {
 jar {
     archiveFileName = 'j2rust.jar'
     destinationDirectory = file('out')
-    manifest { attributes 'Main-Class': 'dev.jnz.Main' }
+    manifest { attributes 'Main-Class': 'dev.jnz.Main', 'Implementation-Version': project.version }
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     from { configurations.runtimeClasspath.collect { zipTree(it) } }
     from('libs') {

@@ -33,7 +33,7 @@ final class Archive {
             if (upper.matches("META-INF/(SIG-[^/]*|[^/]+[.](SF|RSA|DSA|EC))"))
                 throw new IOException("输入 JAR 包含签名，请使用签名前的构建产物 " + name);
             String base = name.replaceFirst("^META-INF/versions/[0-9]+/", "");
-            if (base.startsWith("dev/jnz/runtime/") || base.startsWith("dev/jnz/license/") || base.startsWith("META-INF/jnz/"))
+            if (base.startsWith("dev/jnz/runtime/") || base.startsWith("META-INF/jnz/"))
                 throw new IOException("输入已使用 jnative-zig 运行时命名空间 " + name);
         }
     }

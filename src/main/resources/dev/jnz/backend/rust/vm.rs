@@ -56,9 +56,7 @@ extern "C" {
     pub fn jnz_rust_invoke(env: Env, program: *const Program, args: *const u64, argc: usize, runner: Runner) -> u64;
     pub fn jnz_rust_bind(env: Env, owner: Reference, id: u32, names: Bytes, key: *const u8,
                          thunks: *const *const c_void, thunk_count: usize);
-    pub fn jnz_rust_verify(env: Env, key: Bytes, features: u64,
-                           public: Reference, body: Reference, signature: Reference) -> u8;
-    pub fn jnz_rust_bind_error(env: Env, licensed: u8);
+    pub fn jnz_rust_bind_error(env: Env);
     fn jnz_rust_jni_step(context: *mut c_void, op: u8, x: u32, y: u32, locals: *mut u64, local_count: usize,
                          stack: *mut u64, stack_count: usize, used: *mut usize, pc: *mut usize, value: *mut u64) -> i32;
     fn jnz_rust_exception(context: *mut c_void, table: *const u8, table_size: usize, current: usize, error: i32,

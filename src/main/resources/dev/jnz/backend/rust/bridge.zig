@@ -149,15 +149,8 @@ export fn jnz_rust_bind(env: jni.Env, owner: jni.Ref, id: u32, names: Bytes, key
     jni.registerPacked(env, owner, id, names.slice(), key, thunks[0..thunk_count]);
 }
 
-export fn jnz_rust_verify(env: jni.Env, key: Bytes, features: u64, public: jni.Ref, body: jni.Ref,
-    signature: jni.Ref) callconv(.c) u8
-{
-    return jni.verifyLicense(env, key.slice(), features, public, body, signature);
-}
-
-export fn jnz_rust_bind_error(env: jni.Env, licensed: u8) callconv(.c) void {
-    if (licensed != 0) jni.raise(env, "java/lang/SecurityException", "license required")
-    else jni.raise(env, "java/lang/UnsatisfiedLinkError", "unknown binding id");
+export fn jnz_rust_bind_error(env: jni.Env) callconv(.c) void {
+    jni.raise(env, "java/lang/UnsatisfiedLinkError", "unknown binding id");
 }
 
 export fn jnz_rust_jni_step(context: *links.Context, op: u8, x: u32, y: u32, locals: [*]u64, local_count: usize,

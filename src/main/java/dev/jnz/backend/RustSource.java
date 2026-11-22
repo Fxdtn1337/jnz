@@ -17,11 +17,10 @@ import java.util.Set;
 final class RustSource {
     private RustSource() {}
 
-    static String generate(List<Program> programs, EncryptedPrograms data, byte[] pinned, long features,
-                           SecureRandom random, Path directory, Set<Integer> directIds, String register, String verify)
+    static String generate(List<Program> programs, EncryptedPrograms data,
+                           SecureRandom random, Path directory, Set<Integer> directIds, String register)
             throws IOException {
-        StringBuilder out = new StringBuilder("mod vm;\nuse std::ffi::c_void;\n"
-                + "use std::sync::atomic::{AtomicBool, Ordering};\nuse vm::{Bytes, Env, Program, Reference};\n");
+        StringBuilder out = new StringBuilder("mod vm;\nuse std::ffi::c_void;\nuse vm::{Bytes, Env, Program, Reference};\n");
         if (!directIds.isEmpty()) out.append("use vm::{Frame, Vm};\n");
         byte[] mask = new byte[256];
         byte[] tags = new byte[256];
@@ -30,9 +29,6 @@ final class RustSource {
         addBytes(out, "KEY", data.key);
         addBytes(out, "MASK", mask);
         addBytes(out, "TAGS", tags);
-        addBytes(out, "PINNED", pinned);
-        out.append("const FEATURES: u64 = ").append(Long.toUnsignedString(features)).append(";\n")
-           .append("static VERIFIED: AtomicBool = AtomicBool::new(false);\n");
 
         List<Program> shuffled = new ArrayList<>(programs);
         Collections.shuffle(shuffled, random);
@@ -44,14 +40,9 @@ final class RustSource {
 
         Map<Integer, List<Program>> classes = new LinkedHashMap<>();
         for (Program p : programs) classes.computeIfAbsent(p.classId, id -> new ArrayList<>()).add(p);
-        out.append("#[no_mangle]\npub unsafe extern \"system\" fn ").append(verify)
-           .append("(env: Env, _: Reference, public: Reference, body: Reference, signature: Reference) -> u8 {\n")
-           .append("    let ok = vm::jnz_rust_verify(env, Bytes::new(&PINNED), FEATURES, public, body, signature);\n")
-           .append("    if ok != 0 { VERIFIED.store(true, Ordering::Release); }\n    ok\n}\n")
-           .append("#[no_mangle]\npub unsafe extern \"system\" fn ").append(register)
+        out.append("#[no_mangle]\npub unsafe extern \"system\" fn ").append(register)
            .append("(env: Env, _: Reference, owner: Reference, id: i32) {\n")
-           .append("    if !PINNED.is_empty() && !VERIFIED.load(Ordering::Acquire) {\n")
-           .append("        vm::jnz_rust_bind_error(env, 1);\n        return;\n    }\n    match id {\n");
+           .append("    match id {\n");
         for (Map.Entry<Integer, List<Program>> entry : classes.entrySet()) {
             int id = entry.getKey();
             List<Program> methods = entry.getValue();
@@ -62,7 +53,7 @@ final class RustSource {
                .append(", ").append(bytes("n", id)).append(", KEY.as_ptr(), thunks.as_ptr(), thunks.len());\n")
                .append("        }\n");
         }
-        return out.append("        _ => vm::jnz_rust_bind_error(env, 0),\n    }\n}\n").toString();
+        return out.append("        _ => vm::jnz_rust_bind_error(env),\n    }\n}\n").toString();
     }
 
     private static void addBytes(StringBuilder out, String name, byte[] data) {

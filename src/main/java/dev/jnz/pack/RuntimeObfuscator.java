@@ -24,17 +24,28 @@ final class RuntimeObfuscator {
     static final String BOOTSTRAP = Bundle.RUNTIME + "Bootstrap";
     static final String LITERAL_SITE = Bundle.RUNTIME + "LiteralSite";
     private static final String CODEC = Bundle.RUNTIME + "StringMask";
-    private static final String FINGERPRINT = "dev/jnz/license/DeviceFingerprint";
+    private static final String NAMESPACE = Bundle.RUNTIME + "ResourceNamespace";
+    private static final String MANIFEST = Bundle.RUNTIME + "ManifestRoot";
     private static final String BIND = "(Ljava/lang/Class;I)V";
     private static final String REVEAL = "(Ljava/lang/String;I)Ljava/lang/String;";
-    static final List<String> TEMPLATES = Collections.unmodifiableList(Arrays.asList(
-            BOOTSTRAP, Bundle.RUNTIME + "BindingCache", Bundle.RUNTIME + "PackedResources",
-            Bundle.RUNTIME + "NativeBridge", Bundle.RUNTIME + "PlatformTarget", Bundle.RUNTIME + "ModuleIndex",
-            Bundle.RUNTIME + "NativeLibrary", Bundle.RUNTIME + "LicenseGate", CODEC, FINGERPRINT, LITERAL_SITE));
+    static final List<String> TEMPLATES = templateNames();
 
     private RuntimeObfuscator() {}
 
-    static void emit(Map<String, byte[]> entries, Bundle.Layout layout) throws IOException {
+    private static List<String> templateNames() {
+        List<String> templates = new java.util.ArrayList<>(Arrays.asList(
+                "Bootstrap", "BindingCache", "PackedResources", "NativeBridge", "PlatformTarget",
+                "ModuleIndex", "NativeLibrary", "StringMask", "LiteralSite",
+                "ResourceNamespace", "ResourcePaths", "ModuleName", "BinaryStream",
+                "DigestCodec", "ManifestRoot", "CatalogRecord", "CatalogReader", "MetadataCatalog",
+                "ClassRoute", "GroupRoute", "BridgeNames", "BridgeResolver", "BindingFailure",
+                "HostCpu", "HostSystem", "LinuxAbi", "TempWorkspace", "ModuleBudget",
+                "ModuleSource", "ModuleTransfer", "LoadedGroup", "StagingCleanup"));
+        templates.replaceAll(name -> Bundle.RUNTIME + name);
+        return Collections.unmodifiableList(templates);
+    }
+
+    static void emit(Map<String, byte[]> entries, Bundle.Layout layout, String catalogDigest) throws IOException {
         Map<String, String> templates = layout.templates();
         Map<String, ClassReader> classes = new HashMap<>();
         Map<String, String> methods = new HashMap<>();
@@ -80,10 +91,10 @@ final class RuntimeObfuscator {
             ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
             ClassVisitor remapper = new ClassRemapper(writer, remap);
             ClassVisitor flow = new FlowVisitor(remapper, layout);
-            // 设备指纹的操作系统查询保留原值，方便部署审阅。
-            ClassVisitor output = original.equals(FINGERPRINT) || original.equals(CODEC) ? flow
-                    : new LiteralVisitor(flow, layout);
-            classes.get(original).accept(output, ClassReader.SKIP_DEBUG);
+            ClassVisitor output = original.equals(CODEC) ? flow : new LiteralVisitor(flow, layout);
+            if (original.equals(NAMESPACE) || original.equals(MANIFEST))
+                output = new BuildConstantsVisitor(output, original, layout, catalogDigest);
+            classes.get(original).accept(output, ClassReader.SKIP_DEBUG | ClassReader.EXPAND_FRAMES);
             Bundle.put(entries, templates.get(original) + ".class", writer.toByteArray());
         }
     }
@@ -97,6 +108,33 @@ final class RuntimeObfuscator {
 
     private static String member(String owner, String name, String desc) {
         return owner + '#' + name + '#' + desc;
+    }
+
+    private static final class BuildConstantsVisitor extends ClassVisitor {
+        private final String owner, catalogDigest;
+        private final Bundle.Layout layout;
+
+        BuildConstantsVisitor(ClassVisitor output, String owner, Bundle.Layout layout, String catalogDigest) {
+            super(Opcodes.ASM9, output);
+            this.owner = owner;
+            this.layout = layout;
+            this.catalogDigest = catalogDigest;
+        }
+
+        @Override public MethodVisitor visitMethod(int access, String name, String desc, String signature, String[] exceptions) {
+            MethodVisitor output = super.visitMethod(access, name, desc, signature, exceptions);
+            return new MethodVisitor(Opcodes.ASM9, output) {
+                @Override public void visitLdcInsn(Object value) {
+                    if (owner.equals(NAMESPACE) && desc.equals("()J") && value instanceof Long) {
+                        if (name.equals("left")) value = layout.seedLeft;
+                        else if (name.equals("right")) value = layout.seedRight;
+                    } else if (owner.equals(MANIFEST) && name.equals("encoded") && "JN3_CATALOG_DIGEST".equals(value)) {
+                        value = catalogDigest;
+                    }
+                    super.visitLdcInsn(value);
+                }
+            };
+        }
     }
 
     private static final class LiteralVisitor extends ClassVisitor {
@@ -138,7 +176,7 @@ final class RuntimeObfuscator {
             MethodVisitor target = super.visitMethod(access, name, descriptor, signature, exceptions);
             return new MethodNode(Opcodes.ASM9, access, name, descriptor, signature, exceptions) {
                 @Override public void visitEnd() {
-                    FlowMask.apply(this, layout::seed);
+                    FlowMask.apply(this, layout::seed, "strong");
                     accept(target);
                 }
             };
