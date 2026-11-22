@@ -1,0 +1,37 @@
+plugins {
+    id 'java'
+}
+
+group = 'dev.jnz'
+version = '0.1.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+dependencies {
+    implementation files('libs/asm-9.10.1.jar', 'libs/asm-tree-9.10.1.jar',
+                         'libs/asm-analysis-9.10.1.jar', 'libs/asm-commons-9.10.1.jar',
+                         'libs/bcprov-jdk15on-1.70.jar')
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    if (JavaVersion.current().isJava9Compatible()) options.release.set(8)
+}
+
+jar {
+    archiveFileName = 'j2rust.jar'
+    destinationDirectory = file('out')
+    manifest { attributes 'Main-Class': 'dev.jnz.Main' }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from { configurations.runtimeClasspath.collect { zipTree(it) } }
+    from('libs') {
+        include '*-LICENSE.txt'
+        into 'META-INF'
+    }
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'module-info.class', 'META-INF/versions/**'
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}

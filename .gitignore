@@ -1,0 +1,8 @@
+.gradle/
+build/
+out/
+zig-x86_64-windows-0.17.0-dev.1552+79dc16a0e/
+docs/
+examples/
+tests/
+.idea/
