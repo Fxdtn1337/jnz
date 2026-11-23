@@ -1,6 +1,7 @@
 # J2Rust
 喜欢不妨点个star
 注:这是一个不成熟的项目，如要投入生产可能会有bug，但在未来会越来越完善的。
+
 <img src="src/main/resources/dev/jnz/gui/logo.png" alt="J2Rust Logo" width="112">
 
 J2Rust 把 JAR 里的 Java 方法编译成 Rust 和 JNI 动态库。构建完成后，调用方仍然使用原来的 JAR 入口。想知道哪些方法会被转换，可以先运行 `inspect`。想看生成的 Rust，可以运行 `emit-rust`。
