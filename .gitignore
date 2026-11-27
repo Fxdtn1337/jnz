@@ -7,3 +7,5 @@ docs/*
 examples/
 tests/
 .idea/
+test_aes.jar
+test_aes-native.jar
