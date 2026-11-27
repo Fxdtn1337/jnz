@@ -6,6 +6,7 @@ import dev.jnz.protect.LiteralMask;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.util.Map;
+import java.util.function.BiPredicate;
 import org.objectweb.asm.*;
 import org.objectweb.asm.tree.*;
 
@@ -39,6 +40,11 @@ public final class PreObfuscator {
 
     public static Stats apply(Map<String, byte[]> entries, String includes, String excludes, Bundle.Layout layout,
                               String flowProfile, String cipher) {
+        return apply(entries, includes, excludes, layout, flowProfile, cipher, (owner, method) -> false);
+    }
+
+    public static Stats apply(Map<String, byte[]> entries, String includes, String excludes, Bundle.Layout layout,
+                              String flowProfile, String cipher, BiPredicate<String, MethodNode> nativeLiterals) {
         if (!"off".equals(flowProfile) && !"balanced".equals(flowProfile) && !"strong".equals(flowProfile))
             throw new IllegalArgumentException("flow-profile 必须为 off、balanced 或 strong");
         if (!"off".equals(cipher) && !"xor".equals(cipher) && !"aes".equals(cipher))
@@ -61,7 +67,7 @@ public final class PreObfuscator {
                     total.skippedClasses++;
                     continue;
                 }
-                Stats stats = rewrite(node, selector, layout, bsm, major, random, flowProfile, cipher);
+                Stats stats = rewrite(node, selector, layout, bsm, major, random, flowProfile, cipher, nativeLiterals);
                 if (stats.literals == 0 && stats.jumps == 0) continue;
                 ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
                 node.accept(writer);
@@ -78,12 +84,14 @@ public final class PreObfuscator {
     }
 
     private static Stats rewrite(ClassNode owner, MethodSelector selector, Bundle.Layout layout, Handle bsm,
-                                 int major, SecureRandom random, String flowProfile, String cipher)
+                                 int major, SecureRandom random, String flowProfile, String cipher,
+                                 BiPredicate<String, MethodNode> nativeLiterals)
             throws GeneralSecurityException {
         Stats stats = new Stats();
         for (MethodNode method : owner.methods) {
             if (!selector.accepts(owner, method)) continue;
-            if (!"off".equals(cipher)) rewriteStrings(method, layout, bsm, major, random, cipher, stats);
+            if (!"off".equals(cipher) && !nativeLiterals.test(owner.name, method))
+                rewriteStrings(method, layout, bsm, major, random, cipher, stats);
             FlowMask.Result flow = FlowMask.apply(method, random::nextInt, flowProfile);
             stats.jumps += flow.edges;
             stats.dispatchers += flow.dispatchers;

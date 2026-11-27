@@ -5,13 +5,14 @@ import java.util.Arrays;
 /** CLI 和 GUI 共用的版本与命令说明。 */
 public final class CliInfo {
     public static final String VERSION = version();
-    public static final String Versions = "1.0.0";
+    public static final String Versions = "1.0.1";
     private static final String BANNER = "J2Rust " + VERSION + "  |  JVM 字节码 → Rust / JNI";
     private static final String CONFIG = "  --config FILE      读取 UTF-8 .properties，命令行同名选项优先\n";
     private static final String FILTER = "  --include GLOB     选择包、类、方法或注解，逗号分隔，默认 *\n"
             + "  --exclude GLOB     从已选集合中排除，逗号分隔\n"
             + "  --strict           已选方法无法转换时终止，可用 --no-strict 覆盖配置\n"
             + "  --java-bridges allow|reject  reject 在选中方法无法无桥转换时中止\n"
+            + "  --main-class auto|CLASS  指定并要求转换主入口，auto 从 JAR 清单读取\n"
             + "  --report FILE      指定 JSON 报告路径\n";
     private static final String PROTECTION = "  --flow-profile off|balanced|strong    默认 balanced\n"
             + "  --string-cipher off|xor|aes            默认 aes\n"

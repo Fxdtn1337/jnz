@@ -12,6 +12,7 @@ J2Rust 把 JAR 里的 Java 方法编译成 Rust 和 JNI 动态库。构建完成
 
 | 版本 | 说明 |
 | --- | --- |
+| `1.0.1` | [下载 JAR 和源码](https://github.com/Fxdtn1337/jnz/releases/tag/v1.0.1)。新增主入口检查、指定和强制转换。 |
 | `1.0.0` | [下载 JAR 和源码](https://github.com/Fxdtn1337/jnz/releases/tag/v1.0.0)。扩展 Rust/JNI 执行覆盖，更新 VM 与资源分片格式。 |
 | `0.1.0` | 首版已上传 GitHub。下载入口见 [GitHub Releases](https://github.com/Fxdtn1337/jnz/releases)。 |
 | `0.2.0` | [下载 JAR 和源码](https://github.com/Fxdtn1337/jnz/releases/tag/v0.2.0)。新增构建配置、分命令帮助和混淆选项，移除了旧版许可证系统。 |
@@ -73,6 +74,7 @@ java -jar out\j2rust.jar emit-rust --help
 | `--native-backend rust\|zig` | 默认 Rust，Zig 兼容后端可显式选择。Rust 的 JNI 辅助静态库也由 Zig 编译。 |
 | `--vm-coverage direct\|full\|partial` | `build` 默认使用双层 Rust VM，`emit-rust` 默认生成可读直编函数。带异常表的方法由 VM 执行。 |
 | `--java-bridges allow\|reject` | `reject` 会在选中方法需要 JVM 链接桩或无法转换时中止。选择该模式时，字符串预处理默认关闭，已支持的原始字面量仍通过加密的原生元数据交付。 |
+| `--main-class auto\|CLASS` | `auto` 按清单找到并要求转换应用入口。完整类名可指定入口，并在构建时写入清单。 |
 | `--flow-profile off\|balanced\|strong` | 默认 `balanced`，把符合条件的跳边汇入按键分派。增强档还处理符合条件的 switch 分支。 |
 | `--string-cipher off\|xor\|aes` | 默认 AES-GCM。还原所需的数据随输出分发，适合保护字面量。 |
 | `--jni-bridges N` | 以类为单位继续划分模块，每组生成独立 JNI 桥，模块实际数量会受已选类及原有分组影响。 |
@@ -81,6 +83,14 @@ java -jar out\j2rust.jar emit-rust --help
 | `--report` / `--work-dir` | 分别指定 JSON 报告和生成源码、动态库、日志的目录。 |
 
 ## 转换边界
+
+默认会在报告的 `entrypoint` 中显示应用入口及其转换状态。若构建必须包含主入口，用 `--main-class auto`。它会将入口加入筛选范围，入口被排除或无法转换时会中止。Eclipse 导出的 JAR 保留原启动器，并处理 `Rsrc-Main-Class` 指向的应用类。
+
+```powershell
+java -jar out\j2rust.jar build --input demo\SnakeGame.jar --output out\SnakeGame-main.jar --main-class auto
+```
+
+指定且要求转换的主方法，其字符串字面量直接交给原生路径，不额外生成字面量 JVM 桩。同一方法内重复的普通符号调用会共用链接信息。独立的动态调用站点仍各自链接。
 
 基本和引用数组的元素访问、基本数组创建、长度和部分本类字段及调用可直接走 JNI。数组与多维数组、record 合成方法、捕获 Lambda、方法引用、动态字符串拼接、动态常量和 VarHandle 访问模式有差分用例。需要 JVM 自行完成链接的指令会使用窄桥。构造器可提取符合条件的代码段，父类或同类构造调用及 JVM 要求留在初始化器中的 final 写入仍在原位置。
 

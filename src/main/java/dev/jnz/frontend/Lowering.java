@@ -4,6 +4,9 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Set;
 import java.security.SecureRandom;
 import org.objectweb.asm.Opcodes;
@@ -100,6 +103,7 @@ final class Lowering implements Opcodes {
     private final Set<String> occupied;
     private final NativeMembers members;
     private final List<Linkage> links = new ArrayList<>();
+    private final Map<List<?>, Integer> reusableLinks = new HashMap<>();
     private int cursor;
 
     private Lowering(Map<LabelNode, Integer> labels, int size, int scratch, String owner,
@@ -256,10 +260,37 @@ final class Lowering implements Opcodes {
     }
 
     private void emitLink(AbstractInsnNode node, String reason) throws Unsupported {
+        List<?> key = linkKey(node);
+        Integer existing = key == null ? null : reusableLinks.get(key);
+        if (existing != null) {
+            put(Linkage.OPCODE, existing, 0);
+            return;
+        }
         Linkage link = Linkage.create(node, owner, linkagePrefix + links.size(), occupied, members);
         if (link == null) throw new Unsupported(reason);
+        if (key != null) reusableLinks.put(key, links.size());
         put(Linkage.OPCODE, links.size(), 0);
         links.add(link);
+    }
+
+    private static List<?> linkKey(AbstractInsnNode node) {
+        if (node.visibleTypeAnnotations != null || node.invisibleTypeAnnotations != null) return null;
+        int opcode = node.getOpcode();
+        if (node instanceof MethodInsnNode) {
+            MethodInsnNode method = (MethodInsnNode) node;
+            return Arrays.asList(opcode, method.owner, method.name, method.desc, method.itf);
+        }
+        if (node instanceof FieldInsnNode) {
+            FieldInsnNode field = (FieldInsnNode) node;
+            return Arrays.asList(opcode, field.owner, field.name, field.desc);
+        }
+        if (node instanceof TypeInsnNode) return Arrays.asList(opcode, ((TypeInsnNode) node).desc);
+        if (node instanceof IntInsnNode) return Arrays.asList(opcode, ((IntInsnNode) node).operand);
+        if (node instanceof InsnNode) return Collections.singletonList(opcode);
+        if (node instanceof LdcInsnNode && ((LdcInsnNode) node).cst instanceof String)
+            return Arrays.asList(opcode, ((LdcInsnNode) node).cst);
+        // Dynamic call-site and constant-pool resolution state belong to the original JVM site.
+        return null;
     }
 
     private void putWide(int opcode, long bits) {

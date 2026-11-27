@@ -12,13 +12,14 @@ final class Report {
     private Report() {}
     static byte[] render(String status, List<Program> programs, List<String[]> skips) {
         return render(status, programs, skips, Collections.<Integer>emptySet(), Collections.<Frontend.Initializer>emptyList(),
-                new PreObfuscator.Stats(), 0, 0, "", 0, 0);
+                new PreObfuscator.Stats(), 0, 0, "", 0, 0, null);
     }
     static byte[] render(String status, List<Program> programs, List<String[]> skips, Set<Integer> direct,
                          List<Frontend.Initializer> initializers, PreObfuscator.Stats pre, int bridges,
-                         int loaderClasses, String nativeBackend, int compactedPools, int preservedPools) {
+                         int loaderClasses, String nativeBackend, int compactedPools, int preservedPools, LaunchEntry launch) {
         StringBuilder json = new StringBuilder("{\n  \"status\": ").append(quote(status))
                 .append(",\n  \"version\": ").append(quote(CliInfo.VERSION))
+                .append(",\n  \"entrypoint\": ").append(entrypoint(launch, programs))
                 .append(",\n  \"jniBridges\": ").append(bridges)
                 .append(",\n  \"loaderClasses\": ").append(loaderClasses)
                 .append(",\n  \"nativeBackend\": ").append(quote(nativeBackend))
@@ -64,6 +65,17 @@ final class Report {
                 .append(",\"descriptor\":").append(quote(s[2])).append(",\"reason\":").append(quote(s[3])).append('}');
         }
         return json.append("\n  ]\n}\n").toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static String entrypoint(LaunchEntry launch, List<Program> programs) {
+        if (launch == null) return "null";
+        String descriptor = launch.descriptor;
+        return "{\"class\":" + quote(launch.binaryName) + ",\"launcher\":" + quote(launch.launcher)
+                + ",\"owner\":" + quote(launch.owner)
+                + ",\"descriptor\":" + (descriptor == null ? "null" : quote(descriptor))
+                + ",\"required\":" + launch.required + ",\"converted\":" + launch.converted(programs)
+                + ",\"javaBridges\":" + launch.javaBridges(programs)
+                + ",\"reason\":" + (launch.problem == null ? "null" : quote(launch.problem)) + "}";
     }
     private static String quote(String value) {
         StringBuilder out = new StringBuilder("\"");

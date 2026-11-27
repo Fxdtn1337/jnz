@@ -53,13 +53,16 @@ public final class Main {
         Map<String,byte[]> entries = Archive.read(input);
         if (build) Archive.checkWritable(entries);
         Bundle.Layout layout = Bundle.plan();
+        LaunchEntry launch = LaunchEntry.inspect(entries, opt.get("main-class", null));
         String include = opt.get("include", "*");
+        if (launch != null) include = launch.include(include);
         String exclude = opt.get("exclude", "");
         boolean rejectJavaBridges = opt.get("java-bridges", "allow").equals("reject");
         PreObfuscator.Stats pre = new PreObfuscator.Stats();
         String mode = opt.get("pre-obfuscation", "full");
         if (mode.equals("full")) pre = PreObfuscator.apply(entries, include, exclude, layout,
-                opt.get("flow-profile", "balanced"), opt.get("string-cipher", rejectJavaBridges ? "off" : "aes"));
+                opt.get("flow-profile", "balanced"), opt.get("string-cipher", rejectJavaBridges ? "off" : "aes"),
+                (owner, method) -> launch != null && launch.required && launch.matches(owner, method.name, method.desc));
         else if (!mode.equals("off")) throw new IllegalArgumentException("--pre-obfuscation 使用 full 或 off");
         log.accept("预混淆 AES " + pre.aesLiterals + " 项、XOR " + pre.xorLiterals
                 + " 项，" + pre.dynamicSites + " 个字面量调用点，" + pre.jumps + " 条跳边进入 "
@@ -69,9 +72,25 @@ public final class Main {
             result = Frontend.transform(entries, include, exclude, opt.strict,
                     layout.bootstrapOwner(), layout.bootstrapMethod(), rejectJavaBridges);
         } catch (Frontend.StrictFailure failure) {
-            byte[] json = Report.render("strict-rejected", Collections.<Program>emptyList(), failure.skips);
+            byte[] json = Report.render("strict-rejected", Collections.<Program>emptyList(), failure.skips,
+                    Collections.<Integer>emptySet(), Collections.<Frontend.Initializer>emptyList(), pre,
+                    0, 0, "", 0, 0, launch);
             Archive.publish(report, out -> out.write(json));
             throw new IOException("严格模式拒绝 " + failure.skips.size() + " 项。报告 " + report, failure);
+        }
+        if (launch != null) {
+            log.accept("主入口 " + launch.binaryName + "，" + (launch.converted(result.programs)
+                    ? "已转换，" + launch.javaBridges(result.programs) + " 个 JVM 链接桥。" : "未转换。"));
+            try {
+                launch.verify(result.programs);
+                if (build && !emit) launch.apply(entries);
+            } catch (IOException error) {
+                byte[] json = Report.render("entry-rejected", result.programs, result.skips,
+                        Collections.<Integer>emptySet(), result.initializers, pre, 0, 0, "",
+                        result.compactedPools, result.preservedPools, launch);
+                Archive.publish(report, out -> out.write(json));
+                throw new IOException(error.getMessage() + "。报告 " + report, error);
+            }
         }
         log.accept("可转换 " + (result.programs.size() - result.initializers.size()) + " 个普通方法，抽取 "
                 + result.initializers.size() + " 个初始化器代码段，跳过 " + result.skips.size() + " 项。");
@@ -80,7 +99,7 @@ public final class Main {
                 + result.compactedPools + " 个 class 的常量池。");
         if (!build || result.programs.isEmpty()) {
             byte[] json = Report.render("inspected", result.programs, result.skips, Collections.<Integer>emptySet(),
-                    result.initializers, pre, 0, 0, "", result.compactedPools, result.preservedPools);
+                    result.initializers, pre, 0, 0, "", result.compactedPools, result.preservedPools, launch);
             Archive.publish(report, out -> out.write(json));
             log.accept("报告 " + report);
             if (build) throw new IOException("没有符合条件且可转换的方法");
@@ -170,7 +189,7 @@ public final class Main {
         }
         byte[] json = Report.render(emit ? "rust-source" : "built", result.programs, result.skips, direct,
                 result.initializers, pre, groups.size(), emit ? 0 : layout.runtimeClassCount(), backend,
-                result.compactedPools, result.preservedPools);
+                result.compactedPools, result.preservedPools, launch);
         // 报告单独交付，避免在分发 JAR 中附带完整的源码方法映射。
         Archive.publish(report, out -> out.write(json));
         if (emit) {

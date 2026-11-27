@@ -43,7 +43,7 @@ import static dev.jnz.gui.StudioStyle.ButtonKind.SECONDARY;
 /** Presents shared compiler options and converts form edits to the same arguments as the CLI. */
 final class WorkbenchForm extends JPanel implements Scrollable {
     private static final String[] INSPECT_KEYS = {"input", "include", "exclude", "report", "strict",
-            "java-bridges", "pre-obfuscation", "flow-profile", "string-cipher"};
+            "java-bridges", "pre-obfuscation", "flow-profile", "string-cipher", "main-class"};
     private final Map<String, JTextField> fields = new LinkedHashMap<>();
     private final JFrame frame;
     private final Consumer<String> notification;
@@ -127,6 +127,8 @@ final class WorkbenchForm extends JPanel implements Scrollable {
             if (selected != null) work.setText(selected.getAbsolutePath());
         });
         row(form, 6, "工作目录", work, workButton);
+        row(form, 7, "主类入口", text("main-class", "主类入口"), null);
+        note(form, 8, "留空仅报告现有入口。填 auto 或完整类名会要求转换主入口。");
         return form;
     }
 
