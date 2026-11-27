@@ -19,6 +19,7 @@ public final class Frontend implements Opcodes {
         public final List<Program> programs = new ArrayList<>();
         public final List<String[]> skips = new ArrayList<>();
         public final List<Initializer> initializers = new ArrayList<>();
+        public int compactedPools, preservedPools;
     }
 
     public static final class Initializer {
@@ -54,6 +55,12 @@ public final class Frontend implements Opcodes {
 
     public static Result transform(Map<String, byte[]> entries, String includes, String excludes,
                                    boolean strict, String bootstrapOwner, String bootstrapMethod) throws IOException {
+        return transform(entries, includes, excludes, strict, bootstrapOwner, bootstrapMethod, false);
+    }
+
+    public static Result transform(Map<String, byte[]> entries, String includes, String excludes,
+                                   boolean strict, String bootstrapOwner, String bootstrapMethod,
+                                   boolean rejectJavaBridges) throws IOException {
         Result result = new Result();
         MethodSelector selector = new MethodSelector(includes, excludes);
         Map<String, byte[]> changes = new HashMap<>();
@@ -72,13 +79,13 @@ public final class Frontend implements Opcodes {
                 throw new IOException("Unsupported class version " + major + "." + minor + " in " + entry);
             try {
                 processClass(entry, bytes, major, minor, multiRelease, selector, changes, result,
-                        bootstrapOwner, bootstrapMethod);
+                        bootstrapOwner, bootstrapMethod, rejectJavaBridges);
             } catch (RuntimeException ex) {
                 result.skips.add(new String[] {entry, "", "", "obfuscation-incompatible: "
                         + ex.getClass().getSimpleName() + ": " + ex.getMessage()});
             }
         }
-        if (strict && !result.skips.isEmpty()) throw new StrictFailure(result.skips);
+        if ((strict || rejectJavaBridges) && !result.skips.isEmpty()) throw new StrictFailure(result.skips);
         entries.putAll(changes);
         return result;
     }
@@ -144,7 +151,7 @@ public final class Frontend implements Opcodes {
     private static void processClass(String entry, byte[] bytes, int major, int minor,
                                      boolean multiRelease, MethodSelector selector,
                                      Map<String, byte[]> changes, Result result,
-                                     String bootstrapOwner, String bootstrapMethod) {
+                                     String bootstrapOwner, String bootstrapMethod, boolean rejectJavaBridges) {
         ClassReader reader = new ClassReader(bytes);
         ClassNode owner = new ClassNode(ASM9);
         reader.accept(owner, 0);
@@ -175,6 +182,7 @@ public final class Frontend implements Opcodes {
         Map<MethodNode, InitializerTail> initializerPlans = new IdentityHashMap<>();
         List<Initializer> initializerRecords = new ArrayList<>();
         Set<String> occupiedNames = new HashSet<>();
+        NativeMembers members = new NativeMembers(owner);
         for (MethodNode method : owner.methods) occupiedNames.add(method.name);
         int firstId = result.programs.size();
         for (MethodNode method : owner.methods) {
@@ -186,7 +194,8 @@ public final class Frontend implements Opcodes {
                         String helperName = "$" + Long.toUnsignedString(INITIALIZER_NAMES.nextLong(), 36);
                         while (occupiedNames.contains(helperName)) helperName += "$";
                         CompiledInitializer initializerPlan = compileInitializer(entry, owner, method, helperName,
-                                firstId + pending.size(), firstId, occupiedNames);
+                                firstId + pending.size(), firstId, occupiedNames, members);
+                        if (rejectJavaBridges) for (Program program : initializerPlan.programs) verifyNativeLinks(program);
                         InitializerTail plan = initializerPlan.plan;
                         initializerPlans.put(method, plan);
                         for (InitializerTail.Part part : plan.parts) {
@@ -197,7 +206,8 @@ public final class Frontend implements Opcodes {
                         pending.addAll(initializerPlan.programs);
                     } else {
                         Program program = Lowering.compile(entry, owner.name, method, firstId + pending.size(),
-                                firstId, occupiedNames);
+                                firstId, occupiedNames, members);
+                        if (rejectJavaBridges) verifyNativeLinks(program);
                         registerLinks(occupiedNames, program);
                         pending.add(program);
                         selected.add(method);
@@ -210,27 +220,35 @@ public final class Frontend implements Opcodes {
             result.skips.add(new String[] {versioned ? entry : owner.name, method.name, method.desc, reason});
         }
         if (pending.isEmpty()) return;
-        byte[] rewritten = rewrite(reader, owner, selected, initializerPlans, initializer, firstId,
+        boolean compact = ConstantPoolSafety.canRebuild(reader, owner);
+        byte[] rewritten = rewrite(reader, compact, owner, selected, initializerPlans, initializer, firstId,
                 pending, bootstrapOwner, bootstrapMethod);
         changes.put(entry, rewritten);
+        if (compact) result.compactedPools++;
+        else result.preservedPools++;
         result.programs.addAll(pending);
         result.initializers.addAll(initializerRecords);
     }
 
     private static void registerLinks(Set<String> occupied, Program program) {
-        for (Linkage link : program.links) if (link.mode != Linkage.CONSTRUCT) occupied.add(link.name);
+        for (Linkage link : program.links) if (link.emitsJava()) occupied.add(link.name);
+    }
+
+    private static void verifyNativeLinks(Program program) throws Lowering.Unsupported {
+        int count = program.javaBridges();
+        if (count > 0) throw new Lowering.Unsupported("selected method requires " + count + " JVM linkage bridges");
     }
 
     private static CompiledInitializer compileInitializer(String entry, ClassNode owner, MethodNode source, String name,
-                                                          int id, int classId, Set<String> occupied)
+                                                          int id, int classId, Set<String> occupied, NativeMembers members)
             throws Lowering.Unsupported {
         try {
             InitializerTail plan = InitializerTail.plan(owner, source, name, occupied, true);
-            return lowerInitializer(entry, owner.name, plan, id, classId, occupied);
+            return lowerInitializer(entry, owner.name, plan, id, classId, occupied, members);
         } catch (Lowering.Unsupported first) {
             try {
                 InitializerTail plan = InitializerTail.plan(owner, source, name, occupied, false);
-                return lowerInitializer(entry, owner.name, plan, id, classId, occupied);
+                return lowerInitializer(entry, owner.name, plan, id, classId, occupied, members);
             } catch (Lowering.Unsupported second) {
                 if (first.getMessage().equals(second.getMessage())) throw first;
                 throw new Lowering.Unsupported(first.getMessage() + " / tail fallback: " + second.getMessage());
@@ -239,14 +257,14 @@ public final class Frontend implements Opcodes {
     }
 
     private static CompiledInitializer lowerInitializer(String entry, String owner, InitializerTail plan,
-                                                        int id, int classId, Set<String> occupied)
+                                                        int id, int classId, Set<String> occupied, NativeMembers members)
             throws Lowering.Unsupported {
         // 若一个区域失败，不登记同一初始化方法之前已经成功降低的区域。
         Set<String> local = new HashSet<>(occupied);
         List<Program> programs = new ArrayList<>();
         for (InitializerTail.Part part : plan.parts) local.add(part.helper.name);
         for (InitializerTail.Part part : plan.parts) {
-            Program program = Lowering.compile(entry, owner, part.helper, id + programs.size(), classId, local);
+            Program program = Lowering.compile(entry, owner, part.helper, id + programs.size(), classId, local, members);
             registerLinks(local, program);
             programs.add(program);
         }
@@ -268,20 +286,15 @@ public final class Frontend implements Opcodes {
             return "unknown JVM special method";
         if ((method.access & ACC_NATIVE) != 0) return "already native";
         if ((method.access & ACC_ABSTRACT) != 0) return "abstract method";
-        if ((owner.access & ACC_RECORD) != 0 && (
-                ("equals".equals(method.name) && "(Ljava/lang/Object;)Z".equals(method.desc))
-                || ("hashCode".equals(method.name) && "()I".equals(method.desc))
-                || ("toString".equals(method.name) && "()Ljava/lang/String;".equals(method.desc))))
-            return "record Object method";
         return null;
     }
 
-    private static byte[] rewrite(ClassReader reader, final ClassNode owner, final Set<MethodNode> selected,
+    private static byte[] rewrite(ClassReader reader, boolean compact, final ClassNode owner, final Set<MethodNode> selected,
                                   final Map<MethodNode, InitializerTail> initializerPlans,
                                   final MethodNode initializer, final int firstId, final List<Program> programs,
                                   final String bootstrapOwner, final String bootstrapMethod) {
-        // 重用原常量池与未变更的 method_info，以保留调试信息和未知属性中的索引。
-        ClassWriter writer = new ClassWriter(reader, 0);
+        // Keep the old indices only for classes with index-sensitive attributes or constant resolution.
+        ClassWriter writer = compact ? new ClassWriter(0) : new ClassWriter(reader, 0);
         reader.accept(new ClassVisitor(ASM9, writer) {
             int methodIndex;
             @Override

@@ -24,6 +24,11 @@ final class Lowering implements Opcodes {
 
     static Program compile(String entry, String owner, MethodNode method, int id, int classId,
                            Set<String> occupied) throws Unsupported {
+        return compile(entry, owner, method, id, classId, occupied, NativeMembers.EMPTY);
+    }
+
+    static Program compile(String entry, String owner, MethodNode method, int id, int classId,
+                           Set<String> occupied, NativeMembers members) throws Unsupported {
         if (method.attrs != null && !method.attrs.isEmpty()) throw new Unsupported("unknown method or Code attribute");
         method = inlineSubroutines(method);
         Frame<BasicValue>[] frames;
@@ -59,7 +64,7 @@ final class Lowering implements Opcodes {
             }
         }
         if (size == 0) throw new Unsupported("missing Code instructions");
-        Lowering lowering = new Lowering(labels, size, method.maxLocals, owner, occupied);
+        Lowering lowering = new Lowering(labels, size, method.maxLocals, owner, occupied, members);
         for (AbstractInsnNode node : method.instructions) {
             StackPermutation shuffle = shuffles.get(node);
             if (shuffle != null) lowering.emitShuffle(shuffle);
@@ -93,17 +98,19 @@ final class Lowering implements Opcodes {
     private final int scratch;
     private final String owner, linkagePrefix;
     private final Set<String> occupied;
+    private final NativeMembers members;
     private final List<Linkage> links = new ArrayList<>();
     private int cursor;
 
     private Lowering(Map<LabelNode, Integer> labels, int size, int scratch, String owner,
-                     Set<String> occupied) {
+                     Set<String> occupied, NativeMembers members) {
         this.labels = labels;
         code = new int[size * 3];
         this.scratch = scratch;
         this.owner = owner;
         this.linkagePrefix = "$" + Long.toUnsignedString(LINK_NAMES.nextLong(), 36) + "$";
         this.occupied = occupied;
+        this.members = members;
     }
 
     private int target(LabelNode label) throws Unsupported {
@@ -249,7 +256,7 @@ final class Lowering implements Opcodes {
     }
 
     private void emitLink(AbstractInsnNode node, String reason) throws Unsupported {
-        Linkage link = Linkage.create(node, owner, linkagePrefix + links.size(), occupied);
+        Linkage link = Linkage.create(node, owner, linkagePrefix + links.size(), occupied, members);
         if (link == null) throw new Unsupported(reason);
         put(Linkage.OPCODE, links.size(), 0);
         links.add(link);

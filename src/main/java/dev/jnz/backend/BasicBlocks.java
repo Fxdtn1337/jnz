@@ -11,6 +11,10 @@ final class BasicBlocks {
     private BasicBlocks() {}
 
     static List<Integer> leaders(int[] code) {
+        return leaders(code, new int[0]);
+    }
+
+    static List<Integer> leaders(int[] code, int[] handlers) {
         int count = code.length / 3;
         TreeSet<Integer> leaders = new TreeSet<Integer>();
         leaders.add(0);
@@ -19,6 +23,11 @@ final class BasicBlocks {
             int opcode = code[3*i];
             if (isJump(opcode)) leaders.add(code[3*i+1]);
             if (isJump(opcode) || isReturn(opcode)) leaders.add(i+1);
+        }
+        for (int i = 0; i < handlers.length; i += 4) {
+            leaders.add(handlers[i]);
+            leaders.add(handlers[i+1]);
+            leaders.add(handlers[i+2]);
         }
         return new ArrayList<Integer>(leaders);
     }

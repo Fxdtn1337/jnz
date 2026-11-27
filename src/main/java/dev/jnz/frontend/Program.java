@@ -12,6 +12,12 @@ public final class Program {
     public final int[] handlers;
     public final List<Linkage> links;
 
+    public int javaBridges() {
+        int count = 0;
+        for (Linkage link : links) if (link.emitsJava()) count++;
+        return count;
+    }
+
     Program(int id, int classId, String entry, String owner, String name, String desc, boolean isStatic,
             int maxLocals, int maxStack, int[] code, List<Linkage> links, int[] handlers) {
         this.id = id;

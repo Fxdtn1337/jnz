@@ -4,7 +4,9 @@ use std::{cmp::Ordering, ffi::c_void, ptr, slice};
 
 pub(crate) const INVALID: i32 = -4;
 pub(crate) const DIVIDE_BY_ZERO: i32 = -2;
-type Step = Result<Option<u64>, i32>;
+const SEED_BYTES: usize = std::mem::size_of::<u64>();
+const INSTRUCTION_BYTES: usize = 9;
+pub(crate) type Step = Result<Option<u64>, i32>;
 pub type Env = *mut c_void;
 pub type Reference = *mut c_void;
 
@@ -207,32 +209,113 @@ impl<'a> Vm<'a> {
     }
 }
 
+#[inline]
+fn instruction_mask(seed: u64, pc: usize) -> u64 {
+    let mut mixed = seed.wrapping_add(0x9e3779b97f4a7c15u64.wrapping_mul((pc as u64).wrapping_add(1)));
+    mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d049bb133111eb);
+    mixed ^ (mixed >> 31)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Instruction {
+    pc: usize,
+    opcode: u8,
+    x: u32,
+    y: u32,
+}
+
+pub(crate) struct Execution<'a> {
+    vm: Vm<'a>,
+    code: &'a [u8],
+    handlers: &'a [u8],
+    seed: u64,
+    mask: *const u8,
+    tags: *const u8,
+    output: &'a mut u64,
+}
+
+impl<'a> Execution<'a> {
+    /// The bridge authenticates the program and supplies disjoint, live frame ranges.
+    pub(crate) unsafe fn open(frame: &'a mut Frame) -> Result<Self, i32> {
+        let body = slice::from_raw_parts(frame.body.ptr, frame.body.len);
+        if body.len() < SEED_BYTES + INSTRUCTION_BYTES || (body.len() - SEED_BYTES) % INSTRUCTION_BYTES != 0 {
+            return Err(INVALID);
+        }
+        let (seed, code) = body.split_at(SEED_BYTES);
+        let vm = Vm {
+            context: frame.context,
+            locals: slice::from_raw_parts_mut(frame.locals, frame.local_count),
+            stack: slice::from_raw_parts_mut(frame.stack, frame.stack_count),
+            len: 0,
+            pc: 0,
+        };
+        Ok(Self {
+            vm,
+            code,
+            handlers: slice::from_raw_parts(frame.handlers.ptr, frame.handlers.len),
+            seed: u64::from_le_bytes(seed.try_into().map_err(|_| INVALID)?),
+            mask: frame.mask,
+            tags: frame.tags,
+            output: &mut frame.value,
+        })
+    }
+
+    pub(crate) fn fetch(&mut self) -> Result<Instruction, i32> {
+        let instruction_count = self.code.len() / INSTRUCTION_BYTES;
+        let pc = self.vm.pc;
+        if pc >= instruction_count {
+            return Err(INVALID);
+        }
+        let instruction = &self.code[pc * INSTRUCTION_BYTES..][..INSTRUCTION_BYTES];
+        let whitening = instruction_mask(self.seed, pc);
+        let opcode = (instruction[0] ^ (whitening >> 56) as u8) as usize;
+        let opcode = unsafe {
+            ptr::read_volatile(self.mask.add(opcode)) ^ ptr::read_volatile(self.tags.add(opcode))
+        };
+        let x = u32::from_le_bytes([instruction[1], instruction[2], instruction[3], instruction[4]]) ^ whitening as u32;
+        let y = u32::from_le_bytes([instruction[5], instruction[6], instruction[7], instruction[8]]) ^ (whitening >> 32) as u32;
+        if matches!(opcode, 153..=167 | 198..=199) && x as usize >= instruction_count {
+            return Err(INVALID);
+        }
+        self.vm.pc += 1;
+        Ok(Instruction { pc, opcode, x, y })
+    }
+
+    pub(crate) fn step(&mut self, instruction: Instruction) -> Step {
+        self.vm.step(instruction.opcode, instruction.x, instruction.y)
+    }
+
+    pub(crate) fn recover(&mut self, instruction: Instruction, error: i32) -> Result<(), i32> {
+        self.vm.exception(self.handlers, instruction.pc, error)
+    }
+
+    pub(crate) fn finish(self, value: u64) -> i32 {
+        *self.output = value;
+        0
+    }
+}
+
 pub unsafe extern "C" fn run_vm(frame: *mut Frame) -> i32 {
-    let frame = &mut *frame;
-    let body = slice::from_raw_parts(frame.body.ptr, frame.body.len);
-    let handlers = slice::from_raw_parts(frame.handlers.ptr, frame.handlers.len);
-    let mask = frame.mask;
-    let tags = frame.tags;
-    let mut vm = Vm::for_frame(frame);
-    while vm.pc < body.len() / 9 {
-        let current = vm.pc;
-        let instruction = &body[current * 9..][..9];
-        let opcode = instruction[0] as usize;
-        let opcode = ptr::read_volatile(mask.add(opcode)) ^ ptr::read_volatile(tags.add(opcode));
-        let x = u32::from_le_bytes([instruction[1], instruction[2], instruction[3], instruction[4]]);
-        let y = u32::from_le_bytes([instruction[5], instruction[6], instruction[7], instruction[8]]);
-        vm.pc += 1;
-        match vm.step(opcode, x, y) {
+    let mut execution = match Execution::open(&mut *frame) {
+        Ok(execution) => execution,
+        Err(error) => return error,
+    };
+    loop {
+        let instruction = match execution.fetch() {
+            Ok(instruction) => instruction,
+            Err(error) => return error,
+        };
+        match execution.step(instruction) {
             Ok(None) => {}
-            Ok(Some(value)) => { frame.value = value; return 0; }
+            Ok(Some(value)) => return execution.finish(value),
             Err(error) => {
-                if let Err(status) = vm.exception(handlers, current, error) {
+                if let Err(status) = execution.recover(instruction, error) {
                     return status;
                 }
             }
         }
     }
-    INVALID
 }
 
 pub unsafe fn run_direct(frame: *mut Frame, body: fn(&mut Vm<'_>) -> Result<u64, i32>) -> i32 {

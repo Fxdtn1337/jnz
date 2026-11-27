@@ -81,7 +81,7 @@ fn invoke(env: jni.Env, program: *const Program, args: []const u64, run: Run) !u
     if (args.len > program.locals) return error.InvalidCode;
     const body = program.body.slice();
     const table = program.handlers.slice();
-    if (body.len != 0 and (body.len < 37 or (body.len - 28) % 9 != 0)) return error.InvalidCode;
+    if (body.len != 0 and !vm.isProgramBlob(body.len)) return error.InvalidCode;
     if (table.len != 0 and (table.len < 44 or (table.len - 28) % 16 != 0)) return error.InvalidCode;
     if (body.len == 0 and table.len != 0) return error.InvalidCode;
 
@@ -111,6 +111,7 @@ fn invoke(env: jni.Env, program: *const Program, args: []const u64, run: Run) !u
         allocator.free(ranges);
     };
     try unseal(table, ranges, aad[0..4], program.key);
+    try vm.validateRanges(ranges, vm.programInstructionCount(code.len));
 
     var context = try links.Context.open(env, program.id, program.links.slice(), program.key);
     defer context.close();

@@ -5,17 +5,18 @@ import java.util.Arrays;
 /** CLI 和 GUI 共用的版本与命令说明。 */
 public final class CliInfo {
     public static final String VERSION = version();
-    public static final String Versions = "0.2.0";
+    public static final String Versions = "1.0.0";
     private static final String BANNER = "J2Rust " + VERSION + "  |  JVM 字节码 → Rust / JNI";
     private static final String CONFIG = "  --config FILE      读取 UTF-8 .properties，命令行同名选项优先\n";
     private static final String FILTER = "  --include GLOB     选择包、类、方法或注解，逗号分隔，默认 *\n"
             + "  --exclude GLOB     从已选集合中排除，逗号分隔\n"
             + "  --strict           已选方法无法转换时终止，可用 --no-strict 覆盖配置\n"
+            + "  --java-bridges allow|reject  reject 在选中方法无法无桥转换时中止\n"
             + "  --report FILE      指定 JSON 报告路径\n";
     private static final String PROTECTION = "  --flow-profile off|balanced|strong    默认 balanced\n"
             + "  --string-cipher off|xor|aes            默认 aes\n"
             + "  --pre-obfuscation full|off             控制转换前的混淆，默认 full\n"
-            + "  --vm-coverage direct|full|partial      Rust 默认 direct，Zig 默认 full\n"
+            + "  --vm-coverage direct|full|partial      build 默认 full，emit-rust 默认 direct\n"
             + "  --vm-include GLOB                      partial 模式选取 VM 方法\n"
             + "  --jni-bridges N                        桥接组目标数，1–256\n"
             + "  --module-size SIZE                     按估计的 IR 大小分组，支持 K/M\n";
@@ -59,6 +60,7 @@ public final class CliInfo {
                         + "  --targets host|TRIPLE,...     默认 host，例如 x86_64-windows-gnu\n"
                         + "  --rustc FILE / --zig FILE     指定本地编译器\n"
                         + "  --shard-size SIZE            单个资源分片大小，支持 K/M\n"
+                        + "  --loader-codec auto|raw|deflate  默认 auto，按分片选择编码\n"
                         + "  --work-dir DIR               保留生成源码、模块与构建日志的位置\n"
                         + "\n例如  build --config j2rust.example.properties --jni-bridges 4";
             case "emit-rust":

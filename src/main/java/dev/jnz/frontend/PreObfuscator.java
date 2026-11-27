@@ -55,8 +55,9 @@ public final class PreObfuscator {
             if (major < V1_5 || major > V27) continue;
             try {
                 ClassNode node = new ClassNode(ASM9);
-                new ClassReader(input).accept(node, ClassReader.EXPAND_FRAMES);
-                if (opaqueAttributes(node)) {
+                ClassReader reader = new ClassReader(input);
+                reader.accept(node, ClassReader.EXPAND_FRAMES);
+                if (!ConstantPoolSafety.canRebuild(reader, node)) {
                     total.skippedClasses++;
                     continue;
                 }
@@ -74,16 +75,6 @@ public final class PreObfuscator {
             }
         }
         return total;
-    }
-
-    private static boolean opaqueAttributes(ClassNode node) {
-        if (node.attrs != null && !node.attrs.isEmpty()) return true;
-        for (FieldNode f : node.fields) if (f.attrs != null && !f.attrs.isEmpty()) return true;
-        for (MethodNode m : node.methods) if (m.attrs != null && !m.attrs.isEmpty()) return true;
-        if (node.recordComponents != null) {
-            for (RecordComponentNode r : node.recordComponents) if (r.attrs != null && !r.attrs.isEmpty()) return true;
-        }
-        return false;
     }
 
     private static Stats rewrite(ClassNode owner, MethodSelector selector, Bundle.Layout layout, Handle bsm,

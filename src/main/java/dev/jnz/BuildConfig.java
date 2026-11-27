@@ -17,10 +17,12 @@ import java.util.Set;
 
 /** 按 Java properties 格式读取配置。文件内的相对路径以配置文件所在目录为基准。 */
 public final class BuildConfig {
-    private static final Set<String> INSPECT_OPTIONS = names("input", "include", "exclude", "report", "strict");
+    private static final Set<String> INSPECT_OPTIONS = names("input", "include", "exclude", "report", "strict",
+            "java-bridges", "pre-obfuscation", "flow-profile", "string-cipher");
     private static final Set<String> BUILD_OPTIONS = names("input", "include", "exclude", "report", "strict",
             "output", "targets", "shard-size", "module-size", "work-dir", "zig", "rustc", "vm-coverage",
-            "vm-include", "jni-bridges", "pre-obfuscation", "native-backend", "flow-profile", "string-cipher");
+            "vm-include", "jni-bridges", "pre-obfuscation", "native-backend", "flow-profile", "string-cipher",
+            "java-bridges", "loader-codec");
     private static final Set<String> PATH_OPTIONS = names("input", "output", "report", "work-dir", "rustc", "zig");
 
     private BuildConfig() {}
@@ -88,6 +90,8 @@ public final class BuildConfig {
             case "pre-obfuscation": requireChoice(name, value, "full", "off"); break;
             case "flow-profile": requireChoice(name, value, "off", "balanced", "strong"); break;
             case "string-cipher": requireChoice(name, value, "off", "xor", "aes"); break;
+            case "java-bridges": requireChoice(name, value, "allow", "reject"); break;
+            case "loader-codec": requireChoice(name, value, "auto", "raw", "deflate"); break;
             default: break;
         }
     }

@@ -12,16 +12,19 @@ final class Report {
     private Report() {}
     static byte[] render(String status, List<Program> programs, List<String[]> skips) {
         return render(status, programs, skips, Collections.<Integer>emptySet(), Collections.<Frontend.Initializer>emptyList(),
-                new PreObfuscator.Stats(), 0, 0, "");
+                new PreObfuscator.Stats(), 0, 0, "", 0, 0);
     }
     static byte[] render(String status, List<Program> programs, List<String[]> skips, Set<Integer> direct,
                          List<Frontend.Initializer> initializers, PreObfuscator.Stats pre, int bridges,
-                         int loaderClasses, String nativeBackend) {
+                         int loaderClasses, String nativeBackend, int compactedPools, int preservedPools) {
         StringBuilder json = new StringBuilder("{\n  \"status\": ").append(quote(status))
                 .append(",\n  \"version\": ").append(quote(CliInfo.VERSION))
                 .append(",\n  \"jniBridges\": ").append(bridges)
                 .append(",\n  \"loaderClasses\": ").append(loaderClasses)
                 .append(",\n  \"nativeBackend\": ").append(quote(nativeBackend))
+                .append(",\n  \"javaBridges\": ").append(programs.stream().mapToInt(Program::javaBridges).sum())
+                .append(",\n  \"constantPools\": {\"compacted\":").append(compactedPools)
+                .append(",\"preserved\":").append(preservedPools).append('}')
                 .append(",\n  \"preObfuscation\": {\"literals\":").append(pre.literals)
                 .append(",\"aesLiterals\":").append(pre.aesLiterals)
                 .append(",\"xorLiterals\":").append(pre.xorLiterals)
@@ -36,7 +39,10 @@ final class Report {
                 .append(",\"entry\":").append(quote(p.entry))
                 .append(",\"method\":").append(quote(p.name)).append(",\"descriptor\":").append(quote(p.desc))
                 .append(",\"backend\":").append(quote(direct.contains(p.id) ? "direct" : "vm"))
+                .append(",\"vmLayers\":").append(nativeBackend.isEmpty() || direct.contains(p.id)
+                        ? 0 : nativeBackend.equals("rust") ? 2 : 1)
                 .append(",\"links\":").append(p.links.size())
+                .append(",\"javaBridges\":").append(p.javaBridges())
                 .append(",\"handlers\":").append(p.handlers.length / 4)
                 .append(",\"instructions\":").append(p.code.length/3).append('}');
         }

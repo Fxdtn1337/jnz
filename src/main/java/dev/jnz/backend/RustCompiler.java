@@ -82,10 +82,11 @@ public final class RustCompiler {
         if (programs.isEmpty()) throw new IOException("Rust module has no methods");
         Files.createDirectories(work);
         Path directory = Files.createTempDirectory(work.toAbsolutePath(), "rust-module-");
-        for (String template : Arrays.asList("vm.zig", "jni.zig", "links.zig", "handlers.zig")) {
+        for (String template : Arrays.asList("vm.zig", "jni.zig", "links.zig", "native_ops.zig", "handlers.zig")) {
             copy(template, directory.resolve(template));
         }
         copy("rust/vm.rs", directory.resolve("vm.rs"));
+        copy("rust/control.rs", directory.resolve("control.rs"));
         copy("rust/bridge.zig", directory.resolve("bridge.zig"));
         SecureRandom random = new SecureRandom();
         EncryptedPrograms data = new EncryptedPrograms(random);
@@ -94,7 +95,6 @@ public final class RustCompiler {
             if (!ids.add(p.id)) throw new IOException("Duplicate method ID " + p.id);
             if (p.handlers.length != 0) {
                 if (directIds.contains(p.id)) throw new IOException("Exception-table methods require VM mode: " + p.id);
-                data.writeHandlers(p, directory);
             }
             if (!directIds.contains(p.id)) data.write(p, directory);
             if (!p.links.isEmpty()) data.writeLinks(p, directory);

@@ -3,6 +3,10 @@ const jni = @import("jni.zig");
 const links = @import("links.zig");
 const handlers = @import("handlers.zig");
 const Cipher = std.crypto.aead.chacha_poly.ChaCha20Poly1305;
+const seed_bytes = @sizeOf(u64);
+const instruction_bytes = 9;
+const handler_bytes = 16;
+const seal_overhead = 28;
 pub const asRef = links.asRef;
 pub const fromRef = links.fromRef;
 pub const Context = *links.Context;
@@ -11,7 +15,7 @@ pub const Program = struct {
     id: u32,
     locals: u32,
     stack: u32,
-    // 12-byte nonce | 9-byte encrypted instructions | 16-byte tag
+    // AEAD contains one little-endian seed, then fixed-width masked instructions.
     blob: []const u8,
     links: []const u8,
     handlers: []const u8,
@@ -147,14 +151,51 @@ fn binary(op: u8, a: u64, b: u64) !u64 {
     };
 }
 
-fn interpret(context: Context, code: []const u8, table: []const u8, decode: Decode, locals: []u64, storage: []u64) !u64 {
+pub fn isProgramBlob(length: usize) bool {
+    return length >= seal_overhead + seed_bytes + instruction_bytes and
+        (length - seal_overhead - seed_bytes) % instruction_bytes == 0;
+}
+
+pub fn validateRanges(table: []const u8, instruction_count: usize) !void {
+    if (table.len % handler_bytes != 0) return error.InvalidCode;
+    var offset: usize = 0;
+    while (offset < table.len) : (offset += handler_bytes) {
+        const record = table[offset..][0..handler_bytes];
+        const start = std.mem.readInt(u32, record[0..4], .little);
+        const end = std.mem.readInt(u32, record[4..8], .little);
+        const target = std.mem.readInt(u32, record[8..12], .little);
+        if (start >= end or end > instruction_count or target >= instruction_count) return error.InvalidCode;
+    }
+}
+
+pub fn programInstructionCount(plaintext_length: usize) usize {
+    return (plaintext_length -| seed_bytes) / instruction_bytes;
+}
+
+fn instructionMask(seed: u64, pc: usize) u64 {
+    var mixed = seed +% (0x9e3779b97f4a7c15 *% (@as(u64, pc) +% 1));
+    mixed = (mixed ^ (mixed >> 30)) *% 0xbf58476d1ce4e5b9;
+    mixed = (mixed ^ (mixed >> 27)) *% 0x94d049bb133111eb;
+    return mixed ^ (mixed >> 31);
+}
+
+fn isBranch(op: u8) bool {
+    return (op >= 153 and op <= 167) or op == 198 or op == 199;
+}
+
+fn interpret(context: Context, body: []const u8, table: []const u8, decode: Decode, locals: []u64, storage: []u64) !u64 {
+    const instruction_count = programInstructionCount(body.len);
+    const seed = std.mem.readInt(u64, body[0..seed_bytes], .little);
+    const code = body[seed_bytes..];
     var stack = Stack{ .cells = storage };
     var pc: usize = 0;
-    while (pc < code.len / 9) {
-        const ins = code[pc * 9 ..][0..9];
-        const op = decode.get(ins[0]);
-        const x = std.mem.readInt(u32, ins[1..5], .little);
-        const y = std.mem.readInt(u32, ins[5..9], .little);
+    while (pc < instruction_count) {
+        const ins = code[pc * instruction_bytes ..][0..instruction_bytes];
+        const mask = instructionMask(seed, pc);
+        const op = decode.get(ins[0] ^ @as(u8, @truncate(mask >> 56)));
+        const x = std.mem.readInt(u32, ins[1..5], .little) ^ @as(u32, @truncate(mask));
+        const y = std.mem.readInt(u32, ins[5..9], .little) ^ @as(u32, @truncate(mask >> 32));
+        if (isBranch(op) and x >= instruction_count) return error.InvalidCode;
         const current = pc;
         pc += 1;
         const result = step(context, op, x, y, locals, &stack, &pc) catch |failure| {
@@ -307,7 +348,7 @@ const Frame = struct {
 
 fn execute(env: jni.Env, program: Program, key: *const [32]u8, decode: Decode, args: []const u64) !u64 {
     const blob = program.blob;
-    if (blob.len < 37 or (blob.len - 28) % 9 != 0) return error.InvalidCode;
+    if (!isProgramBlob(blob.len)) return error.InvalidCode;
     // The common case stays on the calling thread's stack. Larger methods use the page allocator.
     var local_cells: [128]u64 = undefined;
     var local_bytes: [1024]u8 = undefined;
@@ -330,6 +371,7 @@ fn execute(env: jni.Env, program: Program, key: *const [32]u8, decode: Decode, a
         std.crypto.secureZero(u8, table);
         allocator.free(table);
     };
+    try validateRanges(table, programInstructionCount(plain.len));
     return interpret(&context, plain, table, decode, frame.locals(), frame.stack());
 }
 

@@ -2,6 +2,7 @@ package dev.jnz.pack;
 
 import dev.jnz.protect.LiteralMask;
 import dev.jnz.runtime.DigestCodec;
+import dev.jnz.runtime.ModuleFormat;
 import dev.jnz.runtime.ResourceLimits;
 import dev.jnz.runtime.ResourceNamespace;
 import dev.jnz.runtime.ResourcePaths;
@@ -136,11 +137,18 @@ public final class Bundle {
 
     public static void addModule(Map<String, byte[]> entries, Layout layout, String target, int groupId, Path library,
                                  int chunkSize) throws IOException {
-        if (chunkSize <= 0) throw new IOException("分片长度必须为正");
+        addModule(entries, layout, target, groupId, library, chunkSize, "auto");
+    }
+
+    public static void addModule(Map<String, byte[]> entries, Layout layout, String target, int groupId, Path library,
+                                 int chunkSize, String codec) throws IOException {
+        ModuleFrameWriter.validateCodec(codec);
+        if (chunkSize <= 0 || chunkSize > ModuleFormat.FRAME_BYTES) throw new IOException("分片长度范围为 1 字节至 64 MiB");
         long fileSize = Files.size(library);
         if (fileSize < 1 || fileSize > ResourceLimits.MODULE_BYTES || 1 + (fileSize - 1) / chunkSize > ResourceLimits.MODULE_BLOCKS)
             throw new IOException("模块长度或分片数超限 " + library);
         MessageDigest digest = DigestCodec.sha256();
+        MessageDigest stored = DigestCodec.sha256();
         byte[] block = new byte[(int) Math.min(fileSize, chunkSize)];
         long size = 0;
         int count = 0;
@@ -151,17 +159,20 @@ public final class Bundle {
                     length += n;
                 if (length == 0) break;
                 digest.update(block, 0, length);
-                put(entries, layout.resourceRoot + ResourcePaths.chunk(target, groupId, count++), Arrays.copyOf(block, length));
+                byte[] frame = ModuleFrameWriter.encode(codec, count, block, length);
+                stored.update(frame);
+                put(entries, layout.resourceRoot + ResourcePaths.chunk(target, groupId, count++), frame);
                 size += length;
             }
         }
         if (size != fileSize || count > ResourceLimits.MODULE_BLOCKS) throw new IOException("构建期间模块长度发生变化 " + library);
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(bytes);
-        out.writeInt(0x4a4e5a31);
+        out.writeInt(ModuleFormat.INDEX_MAGIC);
         out.writeInt(count);
         out.writeLong(size);
         out.write(digest.digest());
+        out.write(stored.digest());
         putMetadata(entries, layout, ResourcePaths.moduleIndex(target, groupId), bytes.toByteArray());
     }
 

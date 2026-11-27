@@ -20,6 +20,7 @@ import static org.objectweb.asm.Opcodes.*;
 public final class Linkage {
     public static final int OPCODE = 254;
     public static final int JVM_OPERATION = 0, ALLOCATE = 1, CONSTRUCT = 2;
+    private static final int INTERN_LITERAL = 3, INTERN_EMPTY = 4;
     private static final Type NONE = Type.VOID_TYPE;
     private static final Type OBJECT = Type.getType(Object.class);
     public final String name, descriptor;
@@ -43,8 +44,14 @@ public final class Linkage {
 
     public Type[] argumentTypes() { return inputs.clone(); }
     public Type resultType() { return output; }
+    public boolean emitsJava() { return mode == JVM_OPERATION || mode == ALLOCATE; }
 
-    static Linkage create(AbstractInsnNode instruction, String caller, String name, Set<String> occupied) {
+    static Linkage nativeOperation(int mode, String name, String descriptor, Type output, Type... inputs) {
+        return new Linkage(mode, name, descriptor, null, output, inputs);
+    }
+
+    static Linkage create(AbstractInsnNode instruction, String caller, String name, Set<String> occupied,
+                          NativeMembers members) {
         int op = instruction.getOpcode();
         while (occupied.contains(name)) name += "$";
         Linkage array = ArrayLinkage.create(name, instruction);
@@ -53,25 +60,28 @@ public final class Linkage {
             FieldInsnNode field = (FieldInsnNode) instruction;
             Type owner = Type.getObjectType(field.owner);
             Type value = Type.getType(field.desc);
-            switch (op) {
-                case GETSTATIC: return new Linkage(name, instruction, value);
-                case GETFIELD: return new Linkage(name, instruction, value, owner);
-                case PUTSTATIC: return new Linkage(name, instruction, NONE, value);
-                case PUTFIELD: return new Linkage(name, instruction, NONE, owner, value);
-                default: return null;
-            }
+            boolean instance = op == GETFIELD || op == PUTFIELD;
+            boolean write = op == PUTSTATIC || op == PUTFIELD;
+            Type result = write ? NONE : value;
+            Type[] args = instance ? (write ? new Type[]{owner, value} : new Type[]{owner})
+                    : (write ? new Type[]{value} : new Type[0]);
+            if (members.field(field)) return nativeOperation(op, field.name, field.desc, result, args);
+            return new Linkage(name, instruction, result, args);
         }
         if (instruction instanceof MethodInsnNode) {
             MethodInsnNode method = (MethodInsnNode) instruction;
             if (isContextSensitive(method)) return null;
             Type[] params = Type.getArgumentTypes(method.desc);
             Type result = Type.getReturnType(method.desc);
-            if (op == INVOKESTATIC) return new Linkage(name, instruction, result, params);
+            boolean direct = members.method(method, params);
+            if (op == INVOKESTATIC) return direct ? nativeOperation(op, method.name, method.desc, result, params)
+                    : new Linkage(name, instruction, result, params);
             Type[] inputs = new Type[params.length + 1];
             boolean constructor = op == INVOKESPECIAL && method.name.equals("<init>");
             inputs[0] = Type.getObjectType(op == INVOKESPECIAL ? caller : method.owner);
             System.arraycopy(params, 0, inputs, 1, params.length);
             if (constructor) return new Linkage(CONSTRUCT, method.owner, method.desc, null, NONE, inputs);
+            if (direct) return nativeOperation(op, method.name, method.desc, result, inputs);
             return new Linkage(name, instruction, result, inputs);
         }
         if (op == NEW) return classToken(name, ((TypeInsnNode) instruction).desc, ALLOCATE);
@@ -83,7 +93,11 @@ public final class Linkage {
         }
         if (instruction instanceof LdcInsnNode) {
             Object value = ((LdcInsnNode) instruction).cst;
-            if (value instanceof String) return new Linkage(name, instruction, Type.getType(String.class));
+            if (value instanceof String) {
+                String literal = (String) value;
+                return nativeOperation(literal.isEmpty() ? INTERN_EMPTY : INTERN_LITERAL,
+                        literal.isEmpty() ? "empty" : literal, "Ljava/lang/String;", Type.getType(String.class));
+            }
             if (value instanceof ConstantDynamic)
                 return new Linkage(name, instruction, Type.getType(((ConstantDynamic) value).getDescriptor()));
             if (value instanceof Handle)
@@ -139,16 +153,10 @@ public final class Linkage {
     }
 
     void write(ClassVisitor outputClass) {
-        if (mode == CONSTRUCT) return;
+        if (!emitsJava()) return;
         MethodVisitor method = outputClass.visitMethod(ACC_PRIVATE | ACC_STATIC | ACC_SYNTHETIC,
                 name, descriptor, null, null);
         method.visitCode();
-        if (instruction.getOpcode() == BALOAD || instruction.getOpcode() == BASTORE) {
-            int slots = ArrayLinkage.writeByteOrBoolean(method, instruction.getOpcode());
-            method.visitMaxs(slots, slots);
-            method.visitEnd();
-            return;
-        }
         int locals = 0;
         for (Type arg : inputs) {
             method.visitVarInsn(arg.getOpcode(ILOAD), locals);

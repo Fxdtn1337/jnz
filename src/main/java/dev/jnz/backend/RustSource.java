@@ -20,8 +20,8 @@ final class RustSource {
     static String generate(List<Program> programs, EncryptedPrograms data,
                            SecureRandom random, Path directory, Set<Integer> directIds, String register)
             throws IOException {
-        StringBuilder out = new StringBuilder("mod vm;\nuse std::ffi::c_void;\nuse vm::{Bytes, Env, Program, Reference};\n");
-        if (!directIds.isEmpty()) out.append("use vm::{Frame, Vm};\n");
+        StringBuilder out = new StringBuilder("mod vm;\nmod control;\nuse std::ffi::c_void;\nuse vm::{Bytes, Env, Frame, Program, Reference};\n");
+        if (!directIds.isEmpty()) out.append("use vm::Vm;\n");
         byte[] mask = new byte[256];
         byte[] tags = new byte[256];
         random.nextBytes(mask);
@@ -35,6 +35,7 @@ final class RustSource {
         for (Program p : shuffled) {
             boolean direct = directIds.contains(p.id);
             if (direct) RustDirectSource.emit(out, p);
+            else RustControlSource.emit(out, p.id, random);
             addThunk(out, p, direct);
         }
 
@@ -92,7 +93,7 @@ final class RustSource {
            .append(",\n        key: KEY.as_ptr(), mask: MASK.as_ptr(), tags: TAGS.as_ptr() };\n")
            .append(result == 'V' ? "    let _ = " : "    let value = ")
            .append("vm::jnz_rust_invoke(env, &program, args.as_ptr(), args.len(), ")
-           .append(direct ? "run_" + p.id : "vm::run_vm").append(");\n");
+           .append(direct ? "run_" + p.id : "layered_" + p.id).append(");\n");
         switch (result) {
             case 'V': break;
             case 'Z': out.append("    (value & 1) as u8\n"); break;

@@ -1,19 +1,23 @@
 const std = @import("std");
 const jni = @import("jni.zig");
+const ops = @import("native_ops.zig");
 const allocator = std.heap.page_allocator;
 const Cipher = std.crypto.aead.chacha_poly.ChaCha20Poly1305;
 
 const Value = extern union {
-    z: u8, b: i8, c: u16, s: i16, i: i32, j: i64, f: f32, d: f64, l: jni.Ref,
+    z: u8,
+    b: i8,
+    c: u16,
+    s: i16,
+    i: i32,
+    j: i64,
+    f: f32,
+    d: f64,
+    l: jni.Ref,
 };
 
-pub fn fromRef(ref: jni.Ref) u64 {
-    return if (ref) |ptr| @intFromPtr(ptr) else 0;
-}
-
-pub fn asRef(bits: u64) jni.Ref {
-    return if (bits == 0) null else @ptrFromInt(@as(usize, @intCast(bits)));
-}
+pub const fromRef = ops.fromRef;
+pub const asRef = ops.asRef;
 
 pub fn same(env: jni.Env, a: u64, b: u64) bool {
     if (a == 0 or b == 0) return a == b;
@@ -21,9 +25,7 @@ pub fn same(env: jni.Env, a: u64, b: u64) bool {
     return call(env, asRef(a), asRef(b)) != 0;
 }
 
-fn cast(comptime T: type, bits: u64) T {
-    return @bitCast(@as(@Int(.unsigned, @bitSizeOf(T)), @truncate(bits)));
-}
+const cast = ops.cast;
 
 fn arg(kind: u8, bits: u64) !Value {
     return switch (kind) {
@@ -119,19 +121,64 @@ pub const Context = struct {
         const descriptor = try jni.takeString(bytes, &offset);
         if (bytes.len - offset < 3) return error.InvalidCode;
         const count = bytes[offset + 1];
-        if (bytes.len - offset - 3 < count or bytes[offset] > 2) return error.InvalidCode;
-        return .{ .name = name, .descriptor = descriptor, .mode = bytes[offset],
-            .result = bytes[offset + 2], .params = bytes[offset + 3 ..][0..count] };
+        if (bytes.len - offset - 3 < count) return error.InvalidCode;
+        switch (bytes[offset]) {
+            0...4, 46...53, 79...86, 178...184, 188, 190 => {},
+            else => return error.InvalidCode,
+        }
+        return .{ .name = name, .descriptor = descriptor, .mode = bytes[offset], .result = bytes[offset + 2], .params = bytes[offset + 3 ..][0..count] };
     }
 
-    fn typedCall(self: *const Context, comptime T: type, index: usize, id: jni.Ref, args: [*]const Value) T {
+    fn typedCall(self: *const Context, comptime T: type, mode: u8, index: usize, target: jni.Ref, id: jni.Ref, args: [*]const Value) T {
+        if (mode == 183) {
+            const call = jni.entry(*const fn (jni.Env, jni.Ref, jni.Ref, jni.Ref, [*]const Value) callconv(.c) T, self.env, index);
+            return call(self.env, target, self.owner, id, args);
+        }
         const call = jni.entry(*const fn (jni.Env, jni.Ref, jni.Ref, [*]const Value) callconv(.c) T, self.env, index);
-        return call(self.env, self.owner, id, args);
+        return call(self.env, target, id, args);
+    }
+
+    fn method(self: *const Context, operation: Call, values: []const u64) !?u64 {
+        var args: [255]Value = undefined;
+        for (operation.params, values, 0..) |kind, value, i| args[i] = try arg(kind, value);
+        if (operation.mode == 2) {
+            if (operation.params.len == 0 or operation.params[0] != 'L' or operation.result != 'V')
+                return error.InvalidCode;
+            try self.construct(operation.name, operation.descriptor, args[0].l, args[1..].ptr);
+            return null;
+        }
+        const mode = operation.mode;
+        const instance = mode == 182 or mode == 183;
+        if (instance and (operation.params.len == 0 or operation.params[0] != 'L')) return error.InvalidCode;
+        const target = if (instance) try ops.receiver(self.env, self.owner, values[0]) else self.owner;
+        const params: [*]const Value = if (instance) args[1..].ptr else &args;
+        const base: usize = switch (mode) {
+            182 => 36,
+            183 => 66,
+            else => 116,
+        };
+        const get = jni.entry(*const fn (jni.Env, jni.Ref, [*:0]const u8, [*:0]const u8) callconv(.c) jni.Ref, self.env, if (instance) 33 else 113);
+        const id = get(self.env, self.owner, operation.name, operation.descriptor) orelse return error.PendingException;
+        return switch (operation.result) {
+            'L' => ops.bits(jni.Ref, self.typedCall(jni.Ref, mode, base, target, id, params)),
+            'Z' => ops.bits(u8, self.typedCall(u8, mode, base + 3, target, id, params)),
+            'B' => ops.bits(i8, self.typedCall(i8, mode, base + 6, target, id, params)),
+            'C' => ops.bits(u16, self.typedCall(u16, mode, base + 9, target, id, params)),
+            'S' => ops.bits(i16, self.typedCall(i16, mode, base + 12, target, id, params)),
+            'I' => ops.bits(i32, self.typedCall(i32, mode, base + 15, target, id, params)),
+            'J' => ops.bits(i64, self.typedCall(i64, mode, base + 18, target, id, params)),
+            'F' => ops.bits(f32, self.typedCall(f32, mode, base + 21, target, id, params)),
+            'D' => ops.bits(f64, self.typedCall(f64, mode, base + 24, target, id, params)),
+            'V' => blk: {
+                self.typedCall(void, mode, base + 27, target, id, params);
+                break :blk null;
+            },
+            else => error.InvalidCode,
+        };
     }
 
     pub fn invoke(self: *Context, operation: Call, values: []const u64) !?u64 {
-        var args: [255]Value = undefined;
-        for (operation.params, values, 0..) |kind, value, i| args[i] = try arg(kind, value);
+        if (values.len != operation.params.len) return error.InvalidCode;
         const push = jni.entry(*const fn (jni.Env, i32) callconv(.c) i32, self.env, 19);
         const pop = jni.entry(*const fn (jni.Env, jni.Ref) callconv(.c) jni.Ref, self.env, 20);
         if (operation.result == 'L') {
@@ -140,34 +187,22 @@ pub const Context = struct {
         }
         if (push(self.env, 16) != 0) return error.PendingException;
         var popped = false;
-        defer if (!popped) { _ = pop(self.env, null); };
-        if (operation.mode == 2) {
-            if (operation.params.len == 0 or operation.params[0] != 'L' or operation.result != 'V')
-                return error.InvalidCode;
-            try self.construct(operation.name, operation.descriptor, args[0].l, args[1..].ptr);
-            return null;
-        }
-        const get = jni.entry(*const fn (jni.Env, jni.Ref, [*:0]const u8, [*:0]const u8) callconv(.c) jni.Ref, self.env, 113);
-        const id = get(self.env, self.owner, operation.name, operation.descriptor) orelse return error.PendingException;
+        defer if (!popped) {
+            _ = pop(self.env, null);
+        };
         const result: ?u64 = switch (operation.result) {
-            'L' => fromRef(self.typedCall(jni.Ref, 116, id, &args)),
-            'Z' => self.typedCall(u8, 119, id, &args),
-            'B' => @as(u32, @bitCast(@as(i32, self.typedCall(i8, 122, id, &args)))),
-            'C' => self.typedCall(u16, 125, id, &args),
-            'S' => @as(u32, @bitCast(@as(i32, self.typedCall(i16, 128, id, &args)))),
-            'I' => @as(u32, @bitCast(self.typedCall(i32, 131, id, &args))),
-            'J' => @as(u64, @bitCast(self.typedCall(i64, 134, id, &args))),
-            'F' => @as(u32, @bitCast(self.typedCall(f32, 137, id, &args))),
-            'D' => @as(u64, @bitCast(self.typedCall(f64, 140, id, &args))),
-            'V' => blk: {
-                self.typedCall(void, 143, id, &args);
-                break :blk null;
+            'L', 'Z', 'B', 'C', 'S', 'I', 'J', 'F', 'D', 'V' => switch (operation.mode) {
+                0...2, 182...184 => try self.method(operation, values),
+                3, 4 => try ops.string(self.env, if (operation.mode == 4) "" else operation.name),
+                46...53, 79...86, 188, 190 => try ops.arrayOp(self.env, operation.mode, operation.descriptor, values),
+                178...181 => try ops.fieldOp(self.env, self.owner, operation.mode, operation.name, operation.descriptor, values),
+                else => return error.InvalidCode,
             },
             else => return error.InvalidCode,
         };
         if (jni.hasException(self.env)) return error.PendingException;
         if (operation.result == 'L') {
-            var reference = asRef(result.?);
+            var reference = asRef(result orelse return error.InvalidCode);
             if (operation.mode == 1) {
                 const allocate = jni.entry(*const fn (jni.Env, jni.Ref) callconv(.c) jni.Ref, self.env, 27);
                 reference = allocate(self.env, reference orelse return error.InvalidCode);
@@ -202,8 +237,7 @@ pub const Context = struct {
         var i: usize = 0;
         while (i < self.references.items.len) {
             const ref = self.references.items[i];
-            if (std.mem.indexOfScalar(u64, locals, ref) != null or std.mem.indexOfScalar(u64, stack, ref) != null
-                or std.mem.indexOfScalar(u64, self.monitors.items, ref) != null) {
+            if (std.mem.indexOfScalar(u64, locals, ref) != null or std.mem.indexOfScalar(u64, stack, ref) != null or std.mem.indexOfScalar(u64, self.monitors.items, ref) != null) {
                 i += 1;
             } else {
                 drop(self.env, asRef(ref));

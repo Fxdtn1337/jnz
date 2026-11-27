@@ -1,11 +1,8 @@
 package dev.jnz.frontend;
 
-import org.objectweb.asm.Label;
-import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.IntInsnNode;
-import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MultiANewArrayInsnNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 
@@ -31,19 +28,20 @@ final class ArrayLinkage {
             Type element = ELEMENTS[opcode - IALOAD];
             Type array = opcode == BALOAD ? OBJECT : arrayOf(element);
             Type result = opcode >= BALOAD ? INT : element;
-            return new Linkage(name, node, result, array, INT);
+            return Linkage.nativeOperation(opcode, "array", arrayOf(element).getDescriptor(), result, array, INT);
         }
         if (opcode >= IASTORE && opcode <= SASTORE) {
             Type element = ELEMENTS[opcode - IASTORE];
             Type array = opcode == BASTORE ? OBJECT : arrayOf(element);
             Type value = opcode >= BASTORE ? INT : element;
-            return new Linkage(name, node, VOID, array, INT, value);
+            return Linkage.nativeOperation(opcode, "array", arrayOf(element).getDescriptor(), VOID, array, INT, value);
         }
         switch (opcode) {
             case NEWARRAY: {
                 int type = ((IntInsnNode) node).operand;
                 if (type < T_BOOLEAN || type > T_LONG) return null;
-                return new Linkage(name, node, Type.getType("[" + NEWARRAY_TYPES.charAt(type - T_BOOLEAN)), INT);
+                Type array = Type.getType("[" + NEWARRAY_TYPES.charAt(type - T_BOOLEAN));
+                return Linkage.nativeOperation(opcode, "array", array.getDescriptor(), array, INT);
             }
             case ANEWARRAY:
                 return new Linkage(name, node, arrayOf(Type.getObjectType(((TypeInsnNode) node).desc)), INT);
@@ -54,9 +52,7 @@ final class ArrayLinkage {
                 return new Linkage(name, node, Type.getType(array.desc), dimensions);
             }
             case ARRAYLENGTH:
-                // JVM 没有覆盖所有原生及引用数组的单个 verifier 类型。
-                return new Linkage(name, new MethodInsnNode(INVOKESTATIC, "java/lang/reflect/Array",
-                        "getLength", "(Ljava/lang/Object;)I", false), INT, OBJECT);
+                return Linkage.nativeOperation(opcode, "array", "Ljava/lang/Object;", INT, OBJECT);
             default:
                 return null;
         }
@@ -66,27 +62,4 @@ final class ArrayLinkage {
         return Type.getType("[" + element.getDescriptor());
     }
 
-    static int writeByteOrBoolean(MethodVisitor code, int opcode) {
-        Label byteArray = new Label();
-        code.visitVarInsn(ALOAD, 0);
-        code.visitTypeInsn(INSTANCEOF, "[Z");
-        code.visitJumpInsn(IFEQ, byteArray);
-        writeElement(code, opcode, "[Z");
-        code.visitLabel(byteArray);
-        Object[] locals = opcode == BALOAD
-                ? new Object[]{"java/lang/Object", INTEGER}
-                : new Object[]{"java/lang/Object", INTEGER, INTEGER};
-        code.visitFrame(F_NEW, locals.length, locals, 0, null);
-        writeElement(code, opcode, "[B");
-        return opcode == BALOAD ? 2 : 3;
-    }
-
-    private static void writeElement(MethodVisitor code, int opcode, String type) {
-        code.visitVarInsn(ALOAD, 0);
-        code.visitTypeInsn(CHECKCAST, type);
-        code.visitVarInsn(ILOAD, 1);
-        if (opcode == BASTORE) code.visitVarInsn(ILOAD, 2);
-        code.visitInsn(opcode);
-        code.visitInsn(opcode == BALOAD ? IRETURN : RETURN);
-    }
 }

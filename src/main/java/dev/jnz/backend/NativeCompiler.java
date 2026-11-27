@@ -29,7 +29,7 @@ public final class NativeCompiler {
         if (programs.isEmpty()) return Collections.emptyList();
         Files.createDirectories(work);
         Path directory = Files.createTempDirectory(work.toAbsolutePath(), "module-");
-        for (String template : Arrays.asList("vm.zig", "jni.zig", "links.zig", "handlers.zig", "build.zig")) {
+        for (String template : Arrays.asList("vm.zig", "jni.zig", "links.zig", "native_ops.zig", "handlers.zig", "build.zig")) {
             try (InputStream in = NativeCompiler.class.getResourceAsStream(template)) {
                 if (in == null) throw new IOException("Missing Zig compiler template " + template);
                 Files.copy(in, directory.resolve(template));
@@ -42,7 +42,6 @@ public final class NativeCompiler {
             if (!ids.add(p.id)) throw new IOException("Duplicate method ID " + p.id);
             if (p.handlers.length > 0) {
                 if (directIds.contains(p.id)) throw new IOException("Exception-table methods require VM mode: " + p.id);
-                encrypted.writeHandlers(p, directory);
             }
             if (!directIds.contains(p.id)) encrypted.write(p, directory);
             if (!p.links.isEmpty()) encrypted.writeLinks(p, directory);

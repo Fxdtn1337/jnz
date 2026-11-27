@@ -40,7 +40,8 @@ final class RuntimeObfuscator {
                 "DigestCodec", "ManifestRoot", "CatalogRecord", "CatalogReader", "MetadataCatalog",
                 "ClassRoute", "GroupRoute", "BridgeNames", "BridgeResolver", "BindingFailure",
                 "HostCpu", "HostSystem", "LinuxAbi", "TempWorkspace", "ModuleBudget",
-                "ModuleSource", "ModuleTransfer", "LoadedGroup", "StagingCleanup"));
+                "ModuleSource", "ModuleTransfer", "ChunkFrame", "DecodedChunk", "ChunkInflater",
+                "LoadedGroup", "StagingCleanup"));
         templates.replaceAll(name -> Bundle.RUNTIME + name);
         return Collections.unmodifiableList(templates);
     }

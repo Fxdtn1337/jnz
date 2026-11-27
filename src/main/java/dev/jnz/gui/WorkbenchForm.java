@@ -42,7 +42,8 @@ import static dev.jnz.gui.StudioStyle.ButtonKind.SECONDARY;
 
 /** Presents shared compiler options and converts form edits to the same arguments as the CLI. */
 final class WorkbenchForm extends JPanel implements Scrollable {
-    private static final String[] INSPECT_KEYS = {"input", "include", "exclude", "report", "strict"};
+    private static final String[] INSPECT_KEYS = {"input", "include", "exclude", "report", "strict",
+            "java-bridges", "pre-obfuscation", "flow-profile", "string-cipher"};
     private final Map<String, JTextField> fields = new LinkedHashMap<>();
     private final JFrame frame;
     private final Consumer<String> notification;
@@ -52,11 +53,15 @@ final class WorkbenchForm extends JPanel implements Scrollable {
     private final JCheckBox strict = check("严格模式 · 跳过时终止构建", false);
     private final JCheckBox pre = check("启用 Java 字节码预混淆", true);
     private final JComboBox<Choice> vm = choices("vm-coverage", "VM 策略", "",
-            "按后端默认", "direct", "直接编译", "full", "全部使用 VM", "partial", "按模式使用 VM");
+            "默认（全部 VM）", "direct", "直接编译", "full", "全部使用 VM", "partial", "按模式使用 VM");
     private final JComboBox<Choice> flow = choices("flow-profile", "控制流", "balanced",
             "均衡", "strong", "增强", "off", "关闭");
-    private final JComboBox<Choice> cipher = choices("string-cipher", "字符串", "aes",
-            "AES", "xor", "XOR", "off", "关闭");
+    private final JComboBox<Choice> cipher = choices("string-cipher", "字符串", "",
+            "按桥接策略自动选择", "aes", "AES", "xor", "XOR", "off", "关闭预处理");
+    private final JComboBox<Choice> javaBridges = choices("java-bridges", "JVM 链接桥", "allow",
+            "保留兼容性", "reject", "有桥则终止");
+    private final JComboBox<Choice> loader = choices("loader-codec", "资源分片编码", "auto",
+            "自动", "raw", "原样", "deflate", "DEFLATE");
     private final JComboBox<Choice> backend = choices("native-backend", "编译后端", "rust",
             "Rust", "zig", "Zig（兼容）");
     private Map<String, String> loadedValues = Collections.emptyMap();
@@ -72,7 +77,7 @@ final class WorkbenchForm extends JPanel implements Scrollable {
         add(nativeOptions(), "native");
         strict.setName("strict");
         pre.setName("pre-obfuscation");
-        Collections.addAll(inputs, config, strict, pre, vm, flow, cipher, backend);
+        Collections.addAll(inputs, config, strict, pre, vm, flow, cipher, backend, javaBridges, loader);
         vm.addActionListener(event -> updateControlStates(true));
         pre.addActionListener(event -> updateControlStates(true));
         updateControlStates(true);
@@ -141,6 +146,8 @@ final class WorkbenchForm extends JPanel implements Scrollable {
         row(form, 8, "控制流", flow, null);
         row(form, 9, "字符串", cipher, null);
         line(form, 10, strict);
+        row(form, 11, "JVM 链接桥", javaBridges, null);
+        note(form, 12, "有桥则终止适用于要求选中方法不生成 JVM 链接桩的构建。");
         return form;
     }
 
@@ -158,7 +165,8 @@ final class WorkbenchForm extends JPanel implements Scrollable {
         row(form, 6, "JNI 桥接组数", text("jni-bridges", "JNI 桥接组数"), null);
         row(form, 7, "模块大小", text("module-size", "模块大小"), null);
         row(form, 8, "资源分片大小", text("shard-size", "资源分片大小"), null);
-        note(form, 9, "大小可写为 64K 或 1M。Rust 和 Zig 路径留空时由 J2Rust 自动查找。");
+        row(form, 9, "资源分片编码", loader, null);
+        note(form, 10, "大小可写为 64K 或 1M。Rust 和 Zig 路径留空时由 J2Rust 自动查找。");
         return form;
     }
 
@@ -324,6 +332,8 @@ final class WorkbenchForm extends JPanel implements Scrollable {
         select(flow, values);
         select(cipher, values);
         select(backend, values);
+        select(javaBridges, values);
+        select(loader, values);
         updateControlStates(true);
         loadedValues = options();
     }
@@ -359,7 +369,9 @@ final class WorkbenchForm extends JPanel implements Scrollable {
         result.put("strict", Boolean.toString(strict.isSelected()));
         result.put("pre-obfuscation", pre.isSelected() ? "full" : "off");
         result.put("flow-profile", key(flow));
-        result.put("string-cipher", key(cipher));
+        if (!key(cipher).isEmpty()) result.put("string-cipher", key(cipher));
+        result.put("java-bridges", key(javaBridges));
+        result.put("loader-codec", key(loader));
         result.put("native-backend", key(backend));
         if (!key(vm).isEmpty()) result.put("vm-coverage", key(vm));
         return result;

@@ -44,16 +44,23 @@ final class EncryptedPrograms {
         if (p.id < 0 || p.code.length == 0 || p.code.length % 3 != 0) {
             throw new IOException("Invalid VM instruction stream for method " + p.id);
         }
-        int[] instructions = p.handlers.length == 0 ? VmLayout.shuffle(p.code, random) : p.code;
-        ByteBuffer code = littleEndian((instructions.length / 3) * 9);
+        VmLayout.Layout layout = VmLayout.relocate(p.code, p.handlers, random);
+        int[] instructions = layout.instructions;
+        long seed = random.nextLong();
+        ByteBuffer code = littleEndian(Math.addExact(VmLayout.SEED_BYTES, Math.multiplyExact(instructions.length / 3, 9)));
+        code.putLong(seed);
         for (int i = 0; i < instructions.length; i += 3) {
             int opcode = instructions[i];
             if (opcode < 0 || opcode > 255) throw new IOException("Invalid VM opcode " + opcode);
-            code.put(encode[opcode]).putInt(instructions[i + 1]).putInt(instructions[i + 2]);
+            long mask = VmLayout.instructionMask(seed, i / 3);
+            code.put((byte) (encode[opcode] ^ (mask >>> 56)))
+                    .putInt(instructions[i + 1] ^ (int) mask)
+                    .putInt(instructions[i + 2] ^ (int) (mask >>> 32));
         }
         byte[] nonce = littleEndian(12).put(noncePrefix).putInt(p.id).array();
         byte[] aad = littleEndian(12).putInt(p.id).putInt(p.maxLocals).putInt(p.maxStack).array();
         seal(code.array(), nonce, aad, directory.resolve("p" + p.id + ".bin"));
+        if (p.handlers.length > 0) writeHandlers(p.id, layout.handlers, directory);
     }
 
     void writeNames(List<Program> methods, Path directory) throws IOException {
@@ -91,12 +98,12 @@ final class EncryptedPrograms {
         seal(body, nonce, littleEndian(4).putInt(p.id).array(), directory.resolve("g" + p.id + ".bin"));
     }
 
-    void writeHandlers(Program p, Path directory) throws IOException {
-        ByteBuffer table = littleEndian(p.handlers.length * 4);
-        for (int value : p.handlers) table.putInt(value);
-        byte[] nonce = littleEndian(12).put(noncePrefix).putInt(p.id).array();
+    private void writeHandlers(int id, int[] handlers, Path directory) throws IOException {
+        ByteBuffer table = littleEndian(Math.multiplyExact(handlers.length, 4));
+        for (int value : handlers) table.putInt(value);
+        byte[] nonce = littleEndian(12).put(noncePrefix).putInt(id).array();
         nonce[0] ^= (byte) 0x20;
-        seal(table.array(), nonce, littleEndian(4).putInt(p.id).array(), directory.resolve("h" + p.id + ".bin"));
+        seal(table.array(), nonce, littleEndian(4).putInt(id).array(), directory.resolve("h" + id + ".bin"));
     }
 
     private static int kind(Type type) {

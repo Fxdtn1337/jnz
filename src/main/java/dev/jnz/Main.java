@@ -55,20 +55,19 @@ public final class Main {
         Bundle.Layout layout = Bundle.plan();
         String include = opt.get("include", "*");
         String exclude = opt.get("exclude", "");
+        boolean rejectJavaBridges = opt.get("java-bridges", "allow").equals("reject");
         PreObfuscator.Stats pre = new PreObfuscator.Stats();
-        if (build) {
-            String mode = opt.get("pre-obfuscation", "full");
-            if (mode.equals("full")) pre = PreObfuscator.apply(entries, include, exclude, layout,
-                    opt.get("flow-profile", "balanced"), opt.get("string-cipher", "aes"));
-            else if (!mode.equals("off")) throw new IllegalArgumentException("--pre-obfuscation 使用 full 或 off");
-            log.accept("预混淆 AES " + pre.aesLiterals + " 项、XOR " + pre.xorLiterals
-                    + " 项，" + pre.dynamicSites + " 个字面量调用点，" + pre.jumps + " 条跳边进入 "
-                    + pre.dispatchers + " 个分发块。");
-        }
+        String mode = opt.get("pre-obfuscation", "full");
+        if (mode.equals("full")) pre = PreObfuscator.apply(entries, include, exclude, layout,
+                opt.get("flow-profile", "balanced"), opt.get("string-cipher", rejectJavaBridges ? "off" : "aes"));
+        else if (!mode.equals("off")) throw new IllegalArgumentException("--pre-obfuscation 使用 full 或 off");
+        log.accept("预混淆 AES " + pre.aesLiterals + " 项、XOR " + pre.xorLiterals
+                + " 项，" + pre.dynamicSites + " 个字面量调用点，" + pre.jumps + " 条跳边进入 "
+                + pre.dispatchers + " 个分发块。");
         Frontend.Result result;
         try {
             result = Frontend.transform(entries, include, exclude, opt.strict,
-                    layout.bootstrapOwner(), layout.bootstrapMethod());
+                    layout.bootstrapOwner(), layout.bootstrapMethod(), rejectJavaBridges);
         } catch (Frontend.StrictFailure failure) {
             byte[] json = Report.render("strict-rejected", Collections.<Program>emptyList(), failure.skips);
             Archive.publish(report, out -> out.write(json));
@@ -76,9 +75,12 @@ public final class Main {
         }
         log.accept("可转换 " + (result.programs.size() - result.initializers.size()) + " 个普通方法，抽取 "
                 + result.initializers.size() + " 个初始化器代码段，跳过 " + result.skips.size() + " 项。");
+        int javaBridges = result.programs.stream().mapToInt(Program::javaBridges).sum();
+        log.accept("选中方法需要 " + javaBridges + " 个 JVM 链接桥，已重建 "
+                + result.compactedPools + " 个 class 的常量池。");
         if (!build || result.programs.isEmpty()) {
             byte[] json = Report.render("inspected", result.programs, result.skips, Collections.<Integer>emptySet(),
-                    result.initializers, pre, 0, 0, "");
+                    result.initializers, pre, 0, 0, "", result.compactedPools, result.preservedPools);
             Archive.publish(report, out -> out.write(json));
             log.accept("报告 " + report);
             if (build) throw new IOException("没有符合条件且可转换的方法");
@@ -90,7 +92,7 @@ public final class Main {
         if (!backend.equals("rust") && (!backend.equals("zig") || emit))
             throw new IllegalArgumentException("原生后端使用 rust 或 zig，emit-rust 只生成 Rust");
         Set<Integer> direct = new HashSet<Integer>();
-        String coverage = opt.get("vm-coverage", backend.equals("rust") ? "direct" : "full");
+        String coverage = opt.get("vm-coverage", emit ? "direct" : "full");
         if (coverage.equals("direct") && !opt.has("vm-include")) {
             for (Program p : result.programs) if (p.handlers.length == 0) direct.add(p.id);
             int fallback = result.programs.size() - direct.size();
@@ -158,7 +160,7 @@ public final class Main {
                         : NativeCompiler.compile(group, directory, target, zig, direct,
                                 bridge.owner(), bridge.registerMethod());
                 if (library.size() != 1) throw new IOException("模块产物数量异常 " + directory);
-                Bundle.addModule(entries, layout, target, groupId, library.get(0), chunk);
+                Bundle.addModule(entries, layout, target, groupId, library.get(0), chunk, opt.get("loader-codec", "auto"));
             }
         }
         if (!emit) {
@@ -167,7 +169,8 @@ public final class Main {
             log.accept("已注入并处理 " + layout.runtimeClassCount() + " 个 Loader 和 JNI 桥接类。");
         }
         byte[] json = Report.render(emit ? "rust-source" : "built", result.programs, result.skips, direct,
-                result.initializers, pre, groups.size(), emit ? 0 : layout.runtimeClassCount(), backend);
+                result.initializers, pre, groups.size(), emit ? 0 : layout.runtimeClassCount(), backend,
+                result.compactedPools, result.preservedPools);
         // 报告单独交付，避免在分发 JAR 中附带完整的源码方法映射。
         Archive.publish(report, out -> out.write(json));
         if (emit) {
